@@ -2,12 +2,15 @@
 
 Adds a checkbox to the editor: **Tools → Force Lights Movable**.
 
-- **On:** sets every light in the open level to **Movable**, so none are Static or Stationary.
+- **On:** after you confirm, the tool opens **every map in the project** (everything under `/Game`) one at a time.
+  In each map it sets every light to **Movable**, so none are Static or Stationary, then saves the map.
   This covers Point, Spot, Rect, Directional and Sky lights, and also light components inside Blueprint actors.
-  Each light's original mobility is saved as a component tag (`LightMobilityTool.Original=Static`, for example).
-  While the checkbox is on, the tool rescans every 2 seconds, so lights you add later and lights in levels you open also become Movable.
-- **Off:** sets each light the tool changed back to its original mobility and removes the tag.
-- Each batch is one undo step, so **Ctrl+Z** reverts it.
+  - Each light's original mobility is saved as a component tag (`LightMobilityTool.Original=Static`, for example).
+  - **World Partition** maps are handled too. The tool loads their actors in batches of 500, so unloaded cells aren't skipped.
+  - A progress bar with a **Cancel** button shows while it runs. When it finishes, it reopens the map you started on.
+  - While the checkbox stays on, the open map is rescanned every 2 seconds, so lights you add later also become Movable.
+- **Off:** opens every map again, sets each light back to its original mobility, removes the tag and saves the map.
+- Before switching maps, the tool asks whether to save any unsaved work.
 - The on/off state is saved in `Saved/LightMobilityTool.json` and persists across editor restarts.
 - The tool doesn't change anything while Play-In-Editor is running.
 
@@ -25,14 +28,25 @@ In the Output Log, switch the input from `Cmd` to `Python`:
 
 ```python
 import light_mobility_tool as lmt
-lmt.enable()      # force all lights Movable
-lmt.disable()     # restore originals
-lmt.toggle()
-lmt.make_all_lights_movable()   # one-shot, does not turn on the watcher
+lmt.enable()                      # all maps: force lights Movable (asks first)
+lmt.disable()                     # all maps: restore originals
+lmt.enable(all_maps=False)        # only the open level
+lmt.process_all_maps(make_movable=True)   # one-shot over all maps, no toggle
+lmt.find_all_maps()               # list the maps it will touch
+lmt.make_all_lights_movable()     # one-shot, open level only
 ```
 
 From a Blueprint (an Editor Utility Widget button, for example), use the **Execute Python Command** node with
 `import light_mobility_tool as lmt; lmt.toggle()`.
+
+## Settings
+
+These are at the top of `Content/Python/light_mobility_tool.py`:
+
+- `MAP_ROOTS = ["/Game"]`: the folders searched for maps. Add `"/YourPlugin"` to include maps inside plugins,
+  or narrow it to something like `["/Game/Maps"]`.
+- `WP_ACTOR_BATCH_SIZE = 500`: how many World Partition actors are loaded at once. Lower it if memory runs out.
+- `RESCAN_INTERVAL = 2.0`: how often, in seconds, the open map is rescanned while the tool is on.
 
 ## Pure-Blueprint alternative (no Python)
 
@@ -46,7 +60,7 @@ If you'd rather build it as an Editor Utility Blueprint:
    - **If unchecked:** if the component has `Orig_Static` or `Orig_Stationary` in its tags, call **Set Mobility** with that value and remove the tag.
 4. Right-click the widget and choose **Run Editor Utility Widget**.
 
-The Python plugin above does the same thing, and also handles undo, the auto-rescan and the saved state.
+That only covers the open level. The Python plugin also goes through every map and handles World Partition, the auto-rescan and the saved state.
 
 ## Notes
 
@@ -54,5 +68,6 @@ The Python plugin above does the same thing, and also handles undo, the auto-res
   lighting is effectively dynamic already and this mostly removes the "lighting needs rebuild" workflow.
 - Lights created by a Blueprint **Construction Script** get rebuilt when that script reruns, so they go back
   to whatever the script sets. The rescan switches them back to Movable on its next pass.
-- When you switch the tool off, only the currently open level is restored. Other levels keep their tags,
-  and you can restore one by opening it and running `lmt.restore_original_mobility()`.
+- The tool saves maps automatically. If you use source control (Perforce or Git LFS locking), check out the maps first,
+  or the saves will fail; any failures show up in the Output Log.
+- On a large project, going through every map can take a while. Commit or back up first, and test on a copy before running it.

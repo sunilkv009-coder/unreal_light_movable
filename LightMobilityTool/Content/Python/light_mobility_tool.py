@@ -2,14 +2,19 @@
 Light Mobility Tool
 ===================
 
-Editor toggle that forces every light in the open level to Movable.
+Editor toggle that forces every light in every map of the project to Movable.
 
-* ON  -> every light component (Point, Spot, Rect, Directional, Sky light,
-         plus light components inside Blueprint actors) is set to Movable.
-         Its original mobility is saved as a component tag so it can be put
-         back later. Lights added while the toggle is on are made Movable too.
-* OFF -> every light the tool changed is set back to its original mobility
-         (Static / Stationary) and the tag is removed.
+* ON  -> every map under MAP_ROOTS (default: /Game) is opened one by one and
+         every light component (Point, Spot, Rect, Directional, Sky light,
+         plus light components inside Blueprint actors) is set to Movable,
+         then the map is saved. Its original mobility is saved as a component
+         tag so it can be put back later. While ON, lights added to whatever
+         map is open are made Movable too.
+* OFF -> every map is opened again, every light the tool changed is set back
+         to its original mobility (Static / Stationary), the tag is removed and
+         the map is saved.
+
+World Partition maps are handled by loading their actors in batches.
 
 The on/off state survives editor restarts (stored in Saved/LightMobilityTool.json).
 
@@ -17,6 +22,8 @@ Usage from the editor:  Tools menu -> "Force Lights Movable"
 Usage from Python / the Output Log (Cmd: Python):
     import light_mobility_tool as lmt
     lmt.enable()   # or lmt.disable(), lmt.toggle(), lmt.is_enabled()
+    lmt.process_all_maps(make_movable=True)   # one-shot, no toggle
+    lmt.make_all_lights_movable()             # current level only
 """
 
 import json
@@ -35,6 +42,12 @@ TAG_PREFIX = "LightMobilityTool.Original="
 # manually-changed lights get switched to Movable as well.
 RESCAN_INTERVAL = 2.0
 
+# Content folders searched for maps. Add e.g. "/MyPlugin" to include plugin maps.
+MAP_ROOTS = ["/Game"]
+
+# World Partition maps: how many actors to load into memory at once.
+WP_ACTOR_BATCH_SIZE = 500
+
 MENU_OWNER = "LightMobilityTool"
 MENU_NAME = "LevelEditor.MainMenu.Tools"
 MENU_SECTION = "LightMobilityTool"
@@ -50,6 +63,7 @@ _MOBILITY_BY_NAME = {
 _enabled = False
 _tick_handle = None
 _time_since_scan = 0.0
+_batch_running = False
 
 
 # --------------------------------------------------------------------------
@@ -154,6 +168,117 @@ def restore_original_mobility(actors=None):
 
 
 # --------------------------------------------------------------------------
+# All maps in the project
+# --------------------------------------------------------------------------
+
+def find_all_maps():
+    """Package paths (e.g. /Game/Maps/MyMap) of every map under MAP_ROOTS."""
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    registry.wait_for_completion()
+    try:  # UE 5.1+
+        ar_filter = unreal.ARFilter(
+            class_paths=[unreal.TopLevelAssetPath("/Script/Engine", "World")],
+            package_paths=MAP_ROOTS, recursive_paths=True)
+    except (AttributeError, TypeError):  # UE 5.0
+        ar_filter = unreal.ARFilter(
+            class_names=["World"], package_paths=MAP_ROOTS, recursive_paths=True)
+    return sorted({str(a.package_name) for a in registry.get_assets(ar_filter)})
+
+
+def _world_partition_actor_guids():
+    """Guids of every actor in the open World Partition map ([] if it isn't one)."""
+    lib = getattr(unreal, "WorldPartitionBlueprintLibrary", None)
+    if lib is None:
+        return []
+    try:
+        result = lib.get_actor_descs()
+    except Exception:
+        return []
+    # Depending on engine version this is either the list or (success, list).
+    if isinstance(result, tuple):
+        result = result[-1]
+    guids = []
+    for desc in result or []:
+        try:
+            guids.append(desc.get_editor_property("guid"))
+        except Exception:
+            pass
+    return guids
+
+
+def _save_dirty_maps():
+    unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, False)
+
+
+def _process_open_map(make_movable):
+    """Apply/restore on the open map (all of it, even unloaded WP cells) and save."""
+    func = make_all_lights_movable if make_movable else restore_original_mobility
+    count = func()
+    _save_dirty_maps()
+
+    guids = _world_partition_actor_guids()
+    if guids:
+        lib = unreal.WorldPartitionBlueprintLibrary
+        for i in range(0, len(guids), WP_ACTOR_BATCH_SIZE):
+            batch = guids[i:i + WP_ACTOR_BATCH_SIZE]
+            lib.load_actors(batch)
+            count += func()
+            _save_dirty_maps()
+            lib.unload_actors(batch)
+    return count
+
+
+def process_all_maps(make_movable=True, maps=None):
+    """
+    Open every map, make its lights Movable (or restore them), and save it.
+    Returns the number of lights changed. Re-opens the map you started on.
+    """
+    global _batch_running
+
+    level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if level_editor.is_in_play_in_editor():
+        unreal.log_warning("[LightMobilityTool] Stop Play-In-Editor first.")
+        return 0
+
+    # Let the user save (or not) whatever they were working on before we switch maps.
+    if not unreal.EditorLoadingAndSavingUtils.save_dirty_packages_with_dialog(True, True):
+        _log("Cancelled.")
+        return 0
+
+    world = _editor_world()
+    start_map = world.get_outermost().get_name() if world else None
+    maps = maps if maps is not None else find_all_maps()
+
+    total = 0
+    done_maps = 0
+    _batch_running = True
+    try:
+        verb = "Making lights Movable" if make_movable else "Restoring light mobility"
+        with unreal.ScopedSlowTask(len(maps), verb + " in all maps...") as task:
+            task.make_dialog(True)
+            for map_path in maps:
+                if task.should_cancel():
+                    unreal.log_warning("[LightMobilityTool] Cancelled after {} map(s).".format(done_maps))
+                    break
+                task.enter_progress_frame(1, "{}: {}".format(verb, map_path))
+                if not level_editor.load_level(map_path):
+                    unreal.log_warning("[LightMobilityTool] Could not open {}".format(map_path))
+                    continue
+                count = _process_open_map(make_movable)
+                if count:
+                    _log("{}: {} light(s)".format(map_path, count))
+                total += count
+                done_maps += 1
+    finally:
+        _batch_running = False
+        if start_map and start_map.startswith("/") and not start_map.startswith("/Temp/"):
+            level_editor.load_level(start_map)
+
+    _log("Done: {} light(s) changed across {} map(s).".format(total, done_maps))
+    return total
+
+
+# --------------------------------------------------------------------------
 # Watcher: keeps new / changed lights Movable while enabled
 # --------------------------------------------------------------------------
 
@@ -165,7 +290,7 @@ def _on_tick(delta_seconds):
         return
     _time_since_scan = 0.0
 
-    if _editor_world() is None:
+    if _batch_running or _editor_world() is None:
         return
     # Don't touch anything while Play-In-Editor is running.
     if unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor():
@@ -196,21 +321,47 @@ def is_enabled():
     return _enabled
 
 
-def enable():
+def _confirm(message):
+    answer = unreal.EditorDialog.show_message(
+        "Light Mobility Tool", message, unreal.AppMsgType.YES_NO)
+    return answer == unreal.AppReturnType.YES
+
+
+def enable(all_maps=True, ask=True):
+    """Turn ON: make every light in every map Movable (or just the open level)."""
     global _enabled
+    if all_maps:
+        maps = find_all_maps()
+        if ask and not _confirm(
+                "Open and save all {} map(s) under {}, setting every light to Movable?\n\n"
+                "Original mobility is remembered, so turning the tool off restores it."
+                .format(len(maps), ", ".join(MAP_ROOTS))):
+            return
+        process_all_maps(True, maps)
+    else:
+        make_all_lights_movable()
     _enabled = True
     _save_state()
-    make_all_lights_movable()
     _start_watcher()
     _log("ON - all lights are forced to Movable.")
 
 
-def disable():
+def disable(all_maps=True, ask=True):
+    """Turn OFF: restore the original mobility in every map (or just the open level)."""
     global _enabled
+    if all_maps:
+        maps = find_all_maps()
+        if ask and not _confirm(
+                "Open and save all {} map(s), restoring every light's original mobility?"
+                .format(len(maps))):
+            return
     _enabled = False
     _save_state()
     _stop_watcher()
-    restore_original_mobility()
+    if all_maps:
+        process_all_maps(False, maps)
+    else:
+        restore_original_mobility()
     _log("OFF - original light mobility restored.")
 
 
@@ -253,8 +404,8 @@ def _register_menu():
         MENU_SECTION,
         "ForceLightsMovable",
         "Force Lights Movable",
-        "When checked, every light in the level is set to Movable (no Static/Stationary). "
-        "Uncheck to restore each light's original mobility.",
+        "When checked, every light in every map is set to Movable (no Static/Stationary) "
+        "and the maps are saved. Uncheck to restore each light's original mobility.",
     )
     advanced = entry.data.advanced
     advanced.user_interface_action_type = unreal.UserInterfaceActionType.TOGGLE_BUTTON
