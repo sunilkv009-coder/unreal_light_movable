@@ -1,6 +1,6 @@
 # Light Mobility Tool (Unreal Engine 5 editor plugin)
 
-Adds a checkbox to the editor: **Tools → Force Lights Movable**.
+Adds a checkbox to the editor: **Tools → Force Lights Movable (All Maps)**.
 
 - **On:** after you confirm, the tool opens **every map in the project** (everything under `/Game`) one at a time.
   In each map it sets every light to **Movable**, so none are Static or Stationary, then saves the map.
@@ -14,13 +14,25 @@ Adds a checkbox to the editor: **Tools → Force Lights Movable**.
 - The on/off state is saved in `Saved/LightMobilityTool.json` and persists across editor restarts.
 - The tool doesn't change anything while Play-In-Editor is running.
 
+## Perforce safety
+
+- **Connection required:** the all-maps pass refuses to start unless the editor is connected to Perforce.
+- **Skipped maps:** maps that aren't at the latest revision, or are checked out by someone else, are skipped entirely and listed in the report.
+- **Checkout first:** a light is changed only after its file has been checked out. That's the `.umap`, or the actor's own file in `__ExternalActors__` for World Partition. If the checkout fails, the light is left alone.
+- **No forced saves:** files that can't be checked out are never saved, and read-only files are never overwritten.
+- **No submits:** nothing is submitted. Changes go to your default changelist, so you can review and submit them in P4V.
+- **Report:** every run writes a report to `Saved/Logs/LightMobilityTool_<date>.txt` listing every change and skip.
+- **Preview:** **Tools → Light Mobility: Preview (no changes)** shows what would change without touching any file.
+
 ## Install
 
-1. Copy the `LightMobilityTool` folder into your project's `Plugins/` folder.
-   Create `Plugins/` if it doesn't exist. The result is `YourProject/Plugins/LightMobilityTool/LightMobilityTool.uplugin`.
-2. Restart the editor. The plugin turns on **Python Editor Script Plugin** and **Editor Scripting Utilities** automatically.
-   If it asks, enable **Light Mobility Tool** under *Edit → Plugins*.
-3. Open **Tools → Force Lights Movable** and click it to switch it on or off.
+See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide, including adding the plugin to Perforce and a safe first run.
+
+Short version:
+1. Copy the `LightMobilityTool` folder to `YourProject/Plugins/LightMobilityTool/`.
+2. Restart the editor and accept enabling the plugin.
+3. Connect to Perforce in the editor, then run **Tools → Light Mobility: Preview (no changes)**.
+4. Then run **Tools → Force Lights Movable (All Maps)**.
 
 ## Use from Python or the console
 
@@ -71,3 +83,14 @@ That only covers the open level. The Python plugin also goes through every map a
 - The tool saves maps automatically. If you use source control (Perforce or Git LFS locking), check out the maps first,
   or the saves will fail; any failures show up in the Output Log.
 - On a large project, going through every map can take a while. Commit or back up first, and test on a copy before running it.
+
+## Tests
+
+`python3 tests/test_tool.py` runs the tool's logic against a fake `unreal` module. It covers:
+- preview mode, and refusing to run when disconnected from Perforce
+- skipping maps that are locked or out of date
+- per-actor World Partition checkouts
+- that no file is saved without being checked out
+- restoring the original mobility
+
+It doesn't replace a test run inside the real editor.
