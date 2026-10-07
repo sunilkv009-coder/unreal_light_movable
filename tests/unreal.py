@@ -23,25 +23,59 @@ class Pkg:
     def __init__(s, n): s.n = n
     def get_name(s): return s.n
 DIRTY = set()
+_ids = [0]
+class Vec:
+    def __init__(s, x=0.0, y=0.0, z=0.0): s.x, s.y, s.z = x, y, z
+class Rot:
+    def __init__(s, r=0.0, p=0.0, y=0.0): s.roll, s.pitch, s.yaw = r, p, y
 class Obj:
-    def __init__(s, pkg): s._pkg = pkg
+    def __init__(s, pkg):
+        s._pkg = pkg; _ids[0] += 1; s._id = _ids[0]
     def get_package(s): return Pkg(s._pkg)
     def get_outermost(s): return Pkg(s._pkg)
-class LightComponentBase: pass
-class Comp(Obj):
-    def __init__(s, owner, mob):
-        super().__init__(owner._pkg); s.owner = owner; s.props = {"mobility": mob, "component_tags": []}
+    def get_path_name(s): return "{}:obj{}".format(s._pkg, s._id)
+class SceneComponent(Obj):
+    def __init__(s, owner, mob, name, parent=None, editor_only=False):
+        super().__init__(owner._pkg); s.owner = owner; s.name = name; s.parent = parent; s.children = []
+        s.props = {"mobility": mob, "component_tags": [], "is_editor_only": editor_only,
+                   "intensity": 5.0, "light_color": (1, 1, 1)}
+        if parent: parent.children.append(s)
     def get_owner(s): return s.owner
-    def get_name(s): return "LightComponent0"
+    def get_name(s): return s.name
     def get_editor_property(s, k): return s.props[k]
     def set_editor_property(s, k, v):
         if s.props[k] != v: DIRTY.add(s._pkg)
         s.props[k] = v
+        if k == "mobility" and SIDE_EFFECT[0]: SIDE_EFFECT[0](s)
+    def get_world_location(s): return Vec(*s.owner.loc)
+    def get_world_rotation(s): return Rot(0, 0, s.owner.yaw)
+    def get_world_scale(s): return Vec(1, 1, 1)
+    def get_world_transform(s): return (tuple(s.owner.loc), s.owner.yaw)
+    def set_world_transform(s, t, sweep, teleport): s.owner.loc, s.owner.yaw = list(t[0]), t[1]
+    def get_attach_parent(s): return s.parent
+    def get_children_components(s, all_desc):
+        out = []
+        for c in s.children:
+            out.append(c); out += c.get_children_components(True)
+        return out
+SIDE_EFFECT = [None]
+class LightComponentBase(SceneComponent): pass
+class Comp(LightComponentBase):
+    def __init__(s, owner, mob): super().__init__(owner, mob, "LightComponent0")
 class Actor(Obj):
     def __init__(s, label, pkg, mobs):
-        super().__init__(pkg); s.label = label; s.comps = [Comp(s, m) for m in mobs]
+        super().__init__(pkg); s.label = label; s.loc = [0.0, 0.0, 0.0]; s.yaw = 0.0
+        s.comps = [Comp(s, m) for m in mobs]; s.others = []
     def get_actor_label(s): return s.label
-    def get_components_by_class(s, c): return s.comps
+    def get_components_by_class(s, c):
+        return list(s.comps) if c is LightComponentBase else list(s.comps) + list(s.others)
+    def get_actor_location(s): return Vec(*s.loc)
+    def get_actor_rotation(s): return Rot(0, 0, s.yaw)
+    def get_actor_scale3d(s): return Vec(1, 1, 1)
+    def get_actor_transform(s): return (tuple(s.loc), s.yaw)
+    def set_actor_transform(s, t, sweep, teleport): s.loc, s.yaw = list(t[0]), t[1]
+    def get_attached_actors(s): return []
+    def get_attach_parent_actor(s): return None
 class World(Obj): pass
 STATE = types.SimpleNamespace(world=None, maps={}, loaded=[], sc=True, files={}, saved=[], pie=False, wp={})
 class UnrealEditorSubsystem:

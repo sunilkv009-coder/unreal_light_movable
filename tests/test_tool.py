@@ -110,4 +110,64 @@ assert a.comps[0].props["mobility"] == M.STATIONARY and c.comps[0].props["mobili
 print("local mode restore OK")
 os.chmod(ro, stat.S_IWRITE | stat.S_IREAD)
 S.sc = True
+# ---- Safety: nothing may move / change besides mobility ----
+lmt._blocked.clear()
+a, a2, sub, b, c, wpi, wp1, wp2 = setup()
+S.maps.pop("/Game/Maps/B"); S.maps.pop("/Game/Maps/C")
+# Headlight: changing mobility triggers a construction-script-like move
+head = U.Actor("Headlight_BP", "/Game/Maps/Car", [M.STATIC])
+# Light with a static mesh attached: must be skipped
+lamp_mesh = U.Actor("LampWithMesh", "/Game/Maps/Car", [M.STATIC])
+U.SceneComponent(lamp_mesh, M.STATIC, "LampShadeMesh", parent=lamp_mesh.comps[0])
+lamp_mesh.others = lamp_mesh.comps[0].children
+# Light with an editor-only static helper (arrow/billboard): must NOT be skipped
+lamp_helper = U.Actor("SunWithArrow", "/Game/Maps/Car", [M.STATIONARY])
+U.SceneComponent(lamp_helper, M.STATIC, "ArrowComponent", parent=lamp_helper.comps[0], editor_only=True)
+S.maps["/Game/Maps/Car"] = {"actors": [head, lamp_mesh, lamp_helper]}
+S.maps["/Game/Maps/Car2"] = {"actors": [U.Actor("Fill", "/Game/Maps/Car2", [M.STATIC])]}
+def side_effect(comp):
+    if comp.owner is head: head.loc[0] += 5.0
+U.SIDE_EFFECT[0] = side_effect
+r = lmt.process_all_maps(True, show_report=False)
+U.SIDE_EFFECT[0] = None
+assert head.loc == [0.0, 0.0, 0.0], head.loc
+assert head.comps[0].props["mobility"] == M.STATIC and head.comps[0].props["component_tags"] == []
+assert lamp_mesh.comps[0].props["mobility"] == M.STATIC
+assert lamp_mesh.others[0].props["mobility"] == M.STATIC
+assert lamp_helper.comps[0].props["mobility"] == M.MOVABLE, "retried alone and passed"
+assert "/Game/Maps/Car" not in S.saved, "map with a failed safety check must not be saved"
+assert "/Game/Maps/Car2" in S.saved, "other maps still processed"
+assert any("SAFETY CHECK" in e for e in r.errors), r.errors
+assert any("LampWithMesh" in n for n, _ in r.lights_skipped), r.lights_skipped
+print("safety errors:", r.errors)
+print("safety skips:", r.lights_skipped)
+
+# World Partition: only the offending actor's own file is left unsaved
+lmt._blocked.clear(); S.saved = []
+good = U.Actor("WPGood", "/Game/__ExternalActors__/Maps/Car4/0/G", [M.STATIC])
+bad = U.Actor("WPBad", "/Game/__ExternalActors__/Maps/Car4/1/B", [M.STATIC])
+S.maps["/Game/Maps/Car4"] = {"actors": [good, bad]}
+U.SIDE_EFFECT[0] = lambda comp: bad.loc.__setitem__(2, 10.0) if comp.owner is bad else None
+r = lmt.process_all_maps(True, maps=["/Game/Maps/Car4"], show_report=False)
+U.SIDE_EFFECT[0] = None
+assert good.comps[0].props["mobility"] == M.MOVABLE and bad.comps[0].props["mobility"] == M.STATIC
+assert bad.loc == [0.0, 0.0, 0.0]
+assert S.saved == ["/Game/__ExternalActors__/Maps/Car4/0/G"], S.saved
+
+# Without the side effect, the helper-only light is changed and the map saved
+lmt._blocked.clear(); S.saved = []
+r = lmt.process_all_maps(True, maps=["/Game/Maps/Car"], show_report=False)
+assert head.comps[0].props["mobility"] == M.MOVABLE and lamp_helper.comps[0].props["mobility"] == M.MOVABLE
+assert lamp_mesh.comps[0].props["mobility"] == M.STATIC
+assert "/Game/Maps/Car" in S.saved and not r.errors
+
+# A light setting changed by side effect is also caught
+lmt._blocked.clear(); S.saved = []
+x = U.Actor("Spot", "/Game/Maps/Car3", [M.STATIC])
+S.maps["/Game/Maps/Car3"] = {"actors": [x]}
+U.SIDE_EFFECT[0] = lambda comp: comp.props.__setitem__("intensity", 99.0)
+r = lmt.process_all_maps(True, maps=["/Game/Maps/Car3"], show_report=False)
+U.SIDE_EFFECT[0] = None
+assert x.comps[0].props["mobility"] == M.STATIC and "/Game/Maps/Car3" not in S.saved
+assert any("intensity" in e for e in r.errors), r.errors
 print("ALL TESTS PASSED")

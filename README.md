@@ -14,6 +14,33 @@ Adds a checkbox to the editor: **Tools → Force Lights Movable (All Maps)**.
 - The on/off state is saved in `Saved/LightMobilityTool.json` and persists across editor restarts.
 - The tool doesn't change anything while Play-In-Editor is running.
 
+## Production safety: nothing moves
+
+The tool changes only one setting per light, **Mobility**, plus a tag that remembers the original value.
+After every change it checks that nothing else changed:
+
+1. **Before:** it records the position, rotation and scale of every actor in the level, plus every component of the affected actors and anything attached to them.
+   It also records their attachments, the mobility of non-light components, and the light settings
+   (intensity, color, temperature, attenuation, cone angles, source size, IES, light function, shadows, lighting channels and so on).
+2. **After:** it compares everything against the recording, with tolerances of 0.001 cm, 0.001° and 0.00001 scale.
+3. **If anything else changed**, for example a Blueprint construction script reacting to the change:
+   - the change is undone and the positions are put back;
+   - the tool retries the lights one at a time, so only the light that caused the problem is left alone;
+   - the file that light lives in is **not saved**;
+   - the problem is listed under ERRORS in the report.
+4. **Lights with non-movable things attached**, such as a lamp-shade mesh under a spot light, are skipped and reported.
+   Unreal could force those attached things to Movable as well. Editor-only helpers, like the arrow on a directional light, are ignored.
+5. **Saving:** only the files that contain lights the tool changed are saved. Anything else Unreal marks as modified when it opens a map is thrown away.
+
+**What does change visually.** Moving a light from Static or Stationary to Movable changes how Unreal renders it:
+baked lightmaps and shadow maps are no longer used, and shadows and GI become fully dynamic.
+That's the purpose of the tool, but it can change the look:
+- **Lumen / fully dynamic projects:** expect little or no difference.
+- **Projects relying on baked lighting:** expect visible differences.
+
+For automotive and pixel-streaming work, compare a few reference shots before and after,
+using Preview first and then a test branch, before rolling it out.
+
 ## Works with or without source control
 
 The tool checks whether the editor is connected to source control and picks a mode automatically:

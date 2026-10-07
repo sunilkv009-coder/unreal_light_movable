@@ -14,6 +14,15 @@ Editor toggle that forces every light in every map of the project to Movable.
          to its original mobility (Static / Stationary), the tag is removed and
          the map is saved.
 
+Nothing moves
+-------------
+Only Mobility (plus a tag) is changed. After every change the tool verifies
+that no actor or component moved/rotated/scaled, no attachment changed and no
+other light setting changed. If anything did, the change is undone, positions
+are restored, the light is skipped and its file is NOT saved. Lights with
+non-movable meshes attached are skipped. Only files containing changed lights
+are saved.
+
 Works with or without source control
 ------------------------------------
 * Connected to Perforce (or another provider) -> "source control mode" below.
@@ -73,6 +82,32 @@ SKIP_FILES_CHECKED_OUT_BY_OTHERS = True
 # Skip files that are not at the latest revision (sync in P4V first).
 SKIP_OUT_OF_DATE_FILES = True
 
+# Skip a light if it has non-movable children (meshes etc. attached to it).
+# Unreal can force children of a Movable component to Movable as well, which
+# would change more than the light itself.
+SKIP_LIGHTS_WITH_NON_MOVABLE_CHILDREN = True
+
+# Safety check tolerances: if anything moves more than this after a change,
+# the change is undone and the map is NOT saved.
+POSITION_TOLERANCE = 0.001   # cm
+ROTATION_TOLERANCE = 0.001   # degrees
+SCALE_TOLERANCE = 0.00001
+
+# Light settings verified to be identical before and after each change.
+# (Properties a light type doesn't have are ignored.)
+LIGHT_PROPERTIES_TO_VERIFY = [
+    "intensity", "intensity_units", "light_color", "temperature", "use_temperature",
+    "attenuation_radius", "source_radius", "soft_source_radius", "source_length",
+    "source_width", "source_height", "barn_door_angle", "barn_door_length",
+    "inner_cone_angle", "outer_cone_angle", "light_source_angle", "light_source_soft_angle",
+    "cast_shadows", "affects_world", "visible", "hidden_in_game",
+    "indirect_lighting_intensity", "volumetric_scattering_intensity", "specular_scale",
+    "ies_texture", "use_ies_brightness", "ies_brightness_scale", "light_function_material",
+    "lighting_channels", "atmosphere_sun_light", "source_type", "cubemap", "source_cube_map",
+    "sky_distance_threshold", "lower_hemisphere_is_black", "use_inverse_squared_falloff",
+    "light_falloff_exponent",
+]
+
 # World Partition maps: how many actors to load into memory at once.
 WP_ACTOR_BATCH_SIZE = 500
 
@@ -119,6 +154,8 @@ class _Report(object):
         self.lights_skipped = []    # (light, reason)
         self.files_not_saved = []   # (file, reason)
         self.errors = []
+        self.blocked_packages = set()  # files whose change failed the safety check (never saved)
+        self.touched = set()        # packages this tool actually modified
 
     def line(self, msg):
         self.lines.append(msg)
@@ -152,6 +189,11 @@ class _Report(object):
         out.append("Lights skipped:   {}".format(len(self.lights_skipped)))
         out.append("Files not saved:  {}".format(len(self.files_not_saved)))
         out.append("Errors:           {}".format(len(self.errors)))
+        out.append("")
+        out.append("Safety: every change was verified - no actor or component moved, no")
+        out.append("attachment changed and no light setting other than Mobility changed.")
+        out.append("Any change that failed this check was undone and its map was NOT saved")
+        out.append("(listed under ERRORS).")
         out.append("")
         for header, items in (("SKIPPED MAPS", self.maps_skipped),
                               ("SKIPPED LIGHTS", self.lights_skipped),
@@ -233,8 +275,12 @@ def _light_components(actors=None):
             yield comp
 
 
+_package_fallback_used = False
+
+
 def _package_name(obj):
     """Package the object is saved in (the actor's own file for One File Per Actor)."""
+    global _package_fallback_used
     pkg = None
     if hasattr(obj, "get_package"):
         try:
@@ -242,6 +288,7 @@ def _package_name(obj):
         except Exception:
             pkg = None
     if pkg is None:
+        _package_fallback_used = True
         pkg = obj.get_outermost()
     return pkg.get_name()
 
@@ -433,10 +480,11 @@ class _EditGuard(object):
 
 
 def _save_dirty(report, map_package):
-    """Check out and save the changed files of this map (the .umap, its external
-    actor files and its _BuiltData). Never force-writes a read-only file: a
-    package that can't be checked out is left unsaved. Packages outside this map
-    are not saved - they are discarded when the next map is opened."""
+    """Check out and save only the files this tool changed (the .umap, or the
+    light actors' own files for World Partition). Never force-writes a read-only
+    file: a package that can't be checked out is left unsaved. Anything else
+    Unreal marked as modified is not saved - it is discarded when the next map
+    is opened."""
     try:
         dirty = list(unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages())
         dirty += list(unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages())
@@ -447,7 +495,13 @@ def _save_dirty(report, map_package):
     to_save = []
     for pkg in dirty:
         name = pkg.get_name()
-        if not (_belongs_to_map(name, map_package) or name == map_package + "_BuiltData"):
+        ours = name in report.touched or (
+            _package_fallback_used and _belongs_to_map(name, map_package))
+        if not ours:
+            continue
+        if name in report.blocked_packages or (
+                _package_fallback_used and report.blocked_packages):
+            report.not_saved(name, "safety check failed for a light in this file (see ERRORS)")
             continue
         ok, reason = _check_editable(name, check_out=True)
         if ok:
@@ -469,30 +523,297 @@ def _save_dirty(report, map_package):
 # Core operations on the open level
 # --------------------------------------------------------------------------
 
-def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=None):
-    """Set every non-movable light to Movable, remembering its original mobility."""
-    guard = _EditGuard(report, map_package, _cache)
-    todo = [c for c in _light_components(actors)
-            if c.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE]
-    todo = [c for c in todo if guard.allow(c)]
-    if not todo:
+def _vec(v):
+    return (v.x, v.y, v.z)
+
+
+def _rot(r):
+    return (r.roll, r.pitch, r.yaw)
+
+
+def _key(obj):
+    try:
+        return obj.get_path_name()
+    except Exception:
+        return str(id(obj))
+
+
+def _same(a, b):
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return abs(float(a) - float(b)) <= 1e-6
+        except (TypeError, ValueError):
+            pass
+    try:
+        return bool(a == b)
+    except Exception:
+        return str(a) == str(b)
+
+
+def _angle_diff(a, b):
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
+def _moved(before, after, tol, angles=False):
+    for x, y in zip(before, after):
+        d = _angle_diff(x, y) if angles else abs(x - y)
+        if d > tol:
+            return True
+    return False
+
+
+def _related_actors(comps):
+    """Owners of the lights plus everything attached to them, and their parents."""
+    result = {}
+    stack = [c.get_owner() for c in comps if c.get_owner() is not None]
+    while stack:
+        actor = stack.pop()
+        k = _key(actor)
+        if k in result:
+            continue
+        result[k] = actor
+        try:
+            stack.extend(actor.get_attached_actors())
+        except Exception:
+            pass
+        try:
+            parent = actor.get_attach_parent_actor()
+            if parent is not None:
+                stack.append(parent)
+        except Exception:
+            pass
+    return list(result.values())
+
+
+def _component_state(comp):
+    state = {
+        "loc": _vec(comp.get_world_location()),
+        "rot": _rot(comp.get_world_rotation()),
+        "scale": _vec(comp.get_world_scale()),
+    }
+    try:
+        parent = comp.get_attach_parent()
+        state["parent"] = _key(parent) if parent is not None else None
+    except Exception:
+        pass
+    if isinstance(comp, unreal.LightComponentBase):
+        props = {}
+        for name in LIGHT_PROPERTIES_TO_VERIFY:
+            try:
+                props[name] = comp.get_editor_property(name)
+            except Exception:
+                pass
+        state["props"] = props
+    else:
+        state["mobility"] = comp.get_editor_property("mobility")
+    return state
+
+
+class _Snapshot(object):
+    """Positions/attachments/settings before a change, to prove nothing else changed."""
+
+    def __init__(self, all_actors, focus_actors):
+        self.actors = {}
+        for a in all_actors:
+            if a is None:
+                continue
+            try:
+                self.actors[_key(a)] = (a, _vec(a.get_actor_location()), _rot(a.get_actor_rotation()),
+                                        _vec(a.get_actor_scale3d()), a.get_actor_transform())
+            except Exception:
+                pass
+        self.comps = {}
+        for a in focus_actors:
+            for c in a.get_components_by_class(unreal.SceneComponent):
+                try:
+                    self.comps[_key(c)] = (c, _component_state(c), c.get_world_transform())
+                except Exception:
+                    pass
+
+    def differences(self):
+        out = []
+        for a, loc, rot, scale, _ in self.actors.values():
+            try:
+                label = a.get_actor_label()
+                if _moved(loc, _vec(a.get_actor_location()), POSITION_TOLERANCE):
+                    out.append("actor '{}' moved".format(label))
+                if _moved(rot, _rot(a.get_actor_rotation()), ROTATION_TOLERANCE, angles=True):
+                    out.append("actor '{}' rotated".format(label))
+                if _moved(scale, _vec(a.get_actor_scale3d()), SCALE_TOLERANCE):
+                    out.append("actor '{}' scale changed".format(label))
+            except Exception:
+                out.append("actor could not be checked (deleted or replaced?)")
+        for c, before, _ in self.comps.values():
+            try:
+                after = _component_state(c)
+            except Exception:
+                out.append("component could not be checked (deleted or replaced?)")
+                continue
+            name = _light_label(c)
+            if _moved(before["loc"], after["loc"], POSITION_TOLERANCE):
+                out.append("{} moved".format(name))
+            if _moved(before["rot"], after["rot"], ROTATION_TOLERANCE, angles=True):
+                out.append("{} rotated".format(name))
+            if _moved(before["scale"], after["scale"], SCALE_TOLERANCE):
+                out.append("{} scale changed".format(name))
+            if before.get("parent") != after.get("parent"):
+                out.append("{} attachment changed".format(name))
+            if "mobility" in before and before["mobility"] != after.get("mobility"):
+                out.append("{} (not a light) mobility changed {} -> {}".format(
+                    name, _mobility_name(before["mobility"]), _mobility_name(after.get("mobility"))))
+            for prop, value in before.get("props", {}).items():
+                if not _same(value, after.get("props", {}).get(prop)):
+                    out.append("{} setting '{}' changed".format(name, prop))
+        return out
+
+    def restore_positions(self):
+        for a, loc, rot, scale, tf in self.actors.values():
+            try:
+                if (_moved(loc, _vec(a.get_actor_location()), POSITION_TOLERANCE)
+                        or _moved(rot, _rot(a.get_actor_rotation()), ROTATION_TOLERANCE, angles=True)
+                        or _moved(scale, _vec(a.get_actor_scale3d()), SCALE_TOLERANCE)):
+                    a.set_actor_transform(tf, False, True)
+            except Exception:
+                pass
+        for c, before, tf in self.comps.values():
+            try:
+                after = _component_state(c)
+                if (_moved(before["loc"], after["loc"], POSITION_TOLERANCE)
+                        or _moved(before["rot"], after["rot"], ROTATION_TOLERANCE, angles=True)
+                        or _moved(before["scale"], after["scale"], SCALE_TOLERANCE)):
+                    c.set_world_transform(tf, False, True)
+            except Exception:
+                pass
+
+
+def _non_movable_children(comp):
+    """Non-light, non-editor-only components attached below this light that are
+    not Movable (Unreal may force them to Movable along with the light)."""
+    names = []
+    try:
+        children = comp.get_children_components(True)
+    except Exception:
+        return names
+    for child in children or []:
+        if isinstance(child, unreal.LightComponentBase):
+            continue
+        try:
+            if child.get_editor_property("is_editor_only"):
+                continue
+        except Exception:
+            pass
+        try:
+            if child.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE:
+                names.append(_light_label(child))
+        except Exception:
+            pass
+    return names
+
+
+# Lights whose change was undone by the safety check; never retried this session.
+_blocked = set()
+
+
+def _apply(changes, title, report):
+    """
+    changes: [(component, new_mobility, new_saved_tag_mobility_or_None)]
+    Applies the changes, then verifies nothing moved and no other setting changed.
+    If anything did, every change is undone and positions are put back.
+    Returns the number of lights changed (0 if undone).
+    """
+    if not changes:
         return 0
+    comps = [c for c, _, _ in changes]
+    before = _Snapshot(_level_actors(), _related_actors(comps))
+    previous = [(c, c.get_editor_property("mobility"), list(c.get_editor_property("component_tags")))
+                for c in comps]
+
     # One undo step for the whole batch (Ctrl+Z reverts it).
-    with unreal.ScopedEditorTransaction("Force Lights Movable"):
-        for comp in todo:
-            current = comp.get_editor_property("mobility")
-            # Only record the first original value, so a light that was Static,
-            # then manually set to Stationary while the tool was on, still
-            # restores to Static.
-            if _get_saved_mobility(comp) is None:
-                _set_saved_mobility(comp, current)
+    with unreal.ScopedEditorTransaction(title):
+        for comp, new_mobility, tag_mobility in changes:
+            _set_saved_mobility(comp, tag_mobility)
             # set_editor_property runs PostEditChange, so the editor updates
             # lighting/shadows exactly as if you changed it in the Details panel.
-            comp.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
-            if report is not None:
-                report.line("  Movable: {}  (was {})".format(_light_label(comp), _mobility_name(current)))
-    _log("Set {} light(s) to Movable.".format(len(todo)))
-    return len(todo)
+            comp.set_editor_property("mobility", new_mobility)
+
+    problems = before.differences()
+    if not problems:
+        if report is not None:
+            for comp, _, _ in changes:
+                report.touched.add(_package_name(comp.get_owner() or comp))
+        return len(changes)
+
+    # Something besides mobility changed: undo everything from this batch.
+    with unreal.ScopedEditorTransaction(title + " (undone by safety check)"):
+        for comp, mobility, tags in previous:
+            comp.set_editor_property("component_tags", tags)
+            comp.set_editor_property("mobility", mobility)
+    before.restore_positions()
+    still = before.differences()
+
+    # Batch failed but undo was clean: retry one light at a time so only the
+    # light(s) that actually cause the side effect are left alone.
+    if len(changes) > 1 and not still:
+        return sum(_apply([change], title, report) for change in changes)
+
+    for comp in comps:
+        _blocked.add(_key(comp))
+
+    msg = ("SAFETY CHECK: changing mobility had side effects, so the change was undone: {}{}"
+           .format("; ".join(sorted(set(problems))[:20]),
+                   " | WARNING, still different after undo: " + "; ".join(sorted(set(still))[:20])
+                   if still else ""))
+    if report is not None:
+        for comp in comps:
+            report.blocked_packages.add(_package_name(comp.get_owner() or comp))
+        report.error(msg)
+    else:
+        unreal.log_error("[LightMobilityTool] " + msg)
+        unreal.EditorDialog.show_message(
+            "Light Mobility Tool - safety check",
+            msg + "\n\nDo not save this level if anything still looks wrong; "
+            "reopen it without saving instead.", unreal.AppMsgType.OK)
+    return 0
+
+
+def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=None):
+    """Set every non-movable light to Movable, remembering its original mobility.
+    Only Mobility (and a tag) changes; this is verified after every batch."""
+    guard = _EditGuard(report, map_package, _cache)
+    todo = [c for c in _light_components(actors)
+            if c.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE
+            and _key(c) not in _blocked]
+    todo = [c for c in todo if guard.allow(c)]
+    if SKIP_LIGHTS_WITH_NON_MOVABLE_CHILDREN:
+        kept = []
+        for c in todo:
+            kids = _non_movable_children(c)
+            if kids:
+                reason = "has non-movable things attached ({}); they would be forced to Movable too".format(
+                    ", ".join(kids[:5]))
+                if report is not None:
+                    report.skip_light(_light_label(c), reason)
+                else:
+                    unreal.log_warning("[LightMobilityTool] Skipped {}: {}".format(_light_label(c), reason))
+                _blocked.add(_key(c))
+            else:
+                kept.append(c)
+        todo = kept
+
+    changes = []
+    for comp in todo:
+        current = comp.get_editor_property("mobility")
+        # Only record the first original value, so a light that was Static,
+        # then manually set to Stationary while the tool was on, still
+        # restores to Static.
+        original = _get_saved_mobility(comp) or current
+        changes.append((comp, unreal.ComponentMobility.MOVABLE, original))
+        if report is not None:
+            report.line("  Movable: {}  (was {})".format(_light_label(comp), _mobility_name(current)))
+    n = _apply(changes, "Force Lights Movable", report)
+    if n:
+        _log("Set {} light(s) to Movable.".format(n))
+    return n
 
 
 def restore_original_mobility(actors=None, report=None, map_package=None):
@@ -500,16 +821,15 @@ def restore_original_mobility(actors=None, report=None, map_package=None):
     guard = _EditGuard(report, map_package)
     todo = [(c, _get_saved_mobility(c)) for c in _light_components(actors)]
     todo = [(c, m) for c, m in todo if m is not None and guard.allow(c)]
-    if not todo:
-        return 0
-    with unreal.ScopedEditorTransaction("Restore Light Mobility"):
-        for comp, original in todo:
-            comp.set_editor_property("mobility", original)
-            _set_saved_mobility(comp, None)
-            if report is not None:
-                report.line("  Restored: {}  -> {}".format(_light_label(comp), _mobility_name(original)))
-    _log("Restored original mobility on {} light(s).".format(len(todo)))
-    return len(todo)
+    changes = []
+    for comp, original in todo:
+        changes.append((comp, original, None))
+        if report is not None:
+            report.line("  Restored: {}  -> {}".format(_light_label(comp), _mobility_name(original)))
+    n = _apply(changes, "Restore Light Mobility", report)
+    if n:
+        _log("Restored original mobility on {} light(s).".format(n))
+    return n
 
 
 def _count_pending(make_movable, map_package):
@@ -521,7 +841,12 @@ def _count_pending(make_movable, map_package):
             continue
         mobility = comp.get_editor_property("mobility")
         if make_movable and mobility != unreal.ComponentMobility.MOVABLE:
-            names.append("{}  ({})".format(_light_label(comp), _mobility_name(mobility)))
+            kids = _non_movable_children(comp) if SKIP_LIGHTS_WITH_NON_MOVABLE_CHILDREN else []
+            if kids:
+                names.append("{}  -> WILL BE SKIPPED, non-movable things attached: {}".format(
+                    _light_label(comp), ", ".join(kids[:5])))
+            else:
+                names.append("{}  ({})".format(_light_label(comp), _mobility_name(mobility)))
         elif not make_movable and _get_saved_mobility(comp) is not None:
             names.append(_light_label(comp))
     return names
@@ -578,10 +903,12 @@ def _process_open_map(map_path, make_movable, report, dry_run):
             seen.update(names)
             for n in names:
                 report.line("  would change: " + n)
-            return len(names)
+            return len([n for n in names if "WILL BE SKIPPED" not in n])
         n = func(report=report, map_package=map_path)
         if n:
             _save_dirty(report, map_path)
+        report.touched.clear()
+        report.blocked_packages.clear()
         return n
 
     count = one_pass()

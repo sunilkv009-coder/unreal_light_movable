@@ -109,6 +109,10 @@ any work done either.
 4. Read the report. If it looks right, click **Tools → Force Lights Movable (All Maps)**.
    The confirm dialog says which mode it will use, **source control** or **LOCAL MODE**. Check that's the mode you expect, then click **Yes**.
 5. When it finishes, read the summary and the report. It lists every map and light that was skipped, and why.
+   - Check the **ERRORS** section. A "SAFETY CHECK" entry means a light's change caused something else to change
+     (usually a Blueprint construction script). The tool undid it and didn't save that file. Change that light by hand, or leave it.
+   - Lights skipped with "non-movable things attached" need you to decide: make the attached mesh Movable as well, or leave the light as it is.
+   - Compare a few reference shots or camera views before and after. Switching from baked to dynamic lighting can change the look.
 6. **(No source control)** You're done. Open a couple of maps and check the lighting.
 7. **(Perforce)** In P4V, open your **default changelist**:
    - It contains the maps the tool changed. For World Partition maps, it also contains the actor files in `__ExternalActors__`.
@@ -119,6 +123,11 @@ To undo everything, untick **Force Lights Movable (All Maps)**. It goes through 
 If you haven't submitted yet, you can also just **Revert** the changelist in P4V. Without source control, you can restore your backup.
 
 ## 8. What the tool will never do
+
+- Move, rotate or scale anything, or change attachments. Every change is verified, and if anything moved, the change is undone and that file isn't saved.
+- Change any light setting other than **Mobility**. Intensity, color, temperature, attenuation, IES, shadows and so on are verified to be identical afterwards.
+- Change lights that have non-movable meshes attached to them. These are skipped and reported.
+- Save files it didn't change itself.
 
 - Save a file it couldn't check out. It never uses "make writable", and never overwrites a read-only file.
 - Change a map, or an actor file, that someone else has checked out.
@@ -137,6 +146,9 @@ These are at the top of `Plugins/LightMobilityTool/Content/Python/light_mobility
 | `REQUIRE_SOURCE_CONTROL` | `False` | `False` works on any project (local mode when not connected). Set it to `True` to refuse to run unless connected to Perforce. |
 | `SKIP_FILES_CHECKED_OUT_BY_OTHERS` | `True` | Leave files locked by teammates alone. |
 | `SKIP_OUT_OF_DATE_FILES` | `True` | Leave files that aren't at head revision alone. |
+| `SKIP_LIGHTS_WITH_NON_MOVABLE_CHILDREN` | `True` | Skip lights that have non-movable meshes or components attached. |
+| `POSITION_TOLERANCE` / `ROTATION_TOLERANCE` / `SCALE_TOLERANCE` | `0.001` cm / `0.001`° / `0.00001` | How much movement counts as "moved" in the safety check. |
+| `LIGHT_PROPERTIES_TO_VERIFY` | (list) | Light settings verified to be unchanged. |
 | `WP_ACTOR_BATCH_SIZE` | `500` | How many World Partition actors are loaded at once. Lower it if you run out of memory. |
 | `RESCAN_INTERVAL` | `2.0` | How often, in seconds, the open map is rescanned while the tool is on. |
 
