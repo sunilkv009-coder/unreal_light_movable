@@ -14,10 +14,16 @@ Editor toggle that forces every light in every map of the project to Movable.
          to its original mobility (Static / Stationary), the tag is removed and
          the map is saved.
 
-Source control (Perforce) safety
---------------------------------
-* Refuses to run over all maps unless the editor is connected to source
-  control (REQUIRE_SOURCE_CONTROL).
+Works with or without source control
+------------------------------------
+* Connected to Perforce (or another provider) -> "source control mode" below.
+* Not connected / normal project -> "local mode": files are edited and saved
+  directly on disk. A file that is read-only on disk (e.g. a Perforce
+  workspace opened without connecting) is never overwritten; it is skipped
+  and listed in the report.
+
+Source control mode
+-------------------
 * A map that is not at the latest revision, or is checked out by someone else,
   is skipped entirely and listed in the report - nothing is changed in it.
 * A light is only changed after the file it is saved in (the .umap, or the
@@ -45,6 +51,7 @@ Python / Output Log (Cmd -> Python):
 import datetime
 import json
 import os
+import stat
 
 import unreal
 
@@ -55,10 +62,10 @@ import unreal
 # Content folders searched for maps. Add e.g. "/MyPlugin" to include plugin maps.
 MAP_ROOTS = ["/Game"]
 
-# Refuse to process all maps when the editor is not connected to source control.
-# Leave this True on a Perforce project: without a connection, files are
-# read-only and nothing could be checked out or saved safely.
-REQUIRE_SOURCE_CONTROL = True
+# True = refuse to process all maps unless connected to source control.
+# False (default) = also works on projects without source control ("local
+# mode"); read-only files are still never overwritten.
+REQUIRE_SOURCE_CONTROL = False
 
 # Skip files someone else has checked out (binary files can't be merged).
 SKIP_FILES_CHECKED_OUT_BY_OTHERS = True
@@ -322,13 +329,49 @@ def _state_flag(state, name):
         return False
 
 
+def _package_file(pkg_name):
+    """Best-effort path on disk of a package (None if it can't be worked out)."""
+    roots = {"Game": unreal.Paths.project_content_dir()}
+    parts = pkg_name.split("/", 2)   # ['', 'Game', 'Maps/Foo']
+    if len(parts) < 3:
+        return None
+    root = roots.get(parts[1])
+    if root is None:
+        # Project plugin content: Plugins/**/<Name>/Content
+        plugins_dir = unreal.Paths.project_plugins_dir()
+        for dirpath, dirnames, _ in os.walk(plugins_dir):
+            if os.path.basename(dirpath) == parts[1] and "Content" in dirnames:
+                root = os.path.join(dirpath, "Content")
+                break
+            if dirpath.count(os.sep) - plugins_dir.count(os.sep) > 3:
+                dirnames[:] = []
+    if root is None:
+        return None
+    base = os.path.join(unreal.Paths.convert_relative_path_to_full(root), *parts[2].split("/"))
+    for ext in (".umap", ".uasset"):
+        if os.path.exists(base + ext):
+            return base + ext
+    return None
+
+
+def _check_local_file(pkg_name):
+    """Local mode (no source control): only refuse files that are read-only."""
+    path = _package_file(pkg_name)
+    # Perforce marks files read-only via the permission bits, so check those
+    # as well as os.access (which is always True for admin/root users).
+    if path and (not os.access(path, os.W_OK) or not (os.stat(path).st_mode & stat.S_IWUSR)):
+        return False, ("file is read-only on disk ({}). If this is a Perforce project, "
+                       "connect to source control and run again".format(path))
+    return True, ""
+
+
 def _check_editable(pkg_name, check_out):
     """
     Returns (ok, reason). With check_out=True the file is checked out when needed.
-    With source control disabled this always returns ok (Unreal handles local files).
+    Without source control (local mode) the file only has to be writable.
     """
     if not source_control_enabled():
-        return True, ""
+        return _check_local_file(pkg_name)
 
     state = _query_state(pkg_name)
     if state is None:
@@ -579,11 +622,15 @@ def process_all_maps(make_movable=True, maps=None, dry_run=False, show_report=Tr
         return report
 
     if not dry_run and REQUIRE_SOURCE_CONTROL and not source_control_enabled():
-        report.error("Not connected to source control. Connect to Perforce "
-                     "(Revision Control button, bottom-right of the editor) and run again.")
+        report.error("Not connected to source control and REQUIRE_SOURCE_CONTROL is True. "
+                     "Connect (Revision Control button, bottom-right of the editor) and run again.")
         if show_report:
             report.show()
         return report
+
+    report.line("Mode: {}".format(
+        "source control (files are checked out before saving)" if source_control_enabled()
+        else "local - no source control connected (files saved directly; read-only files skipped)"))
 
     # Let the user save (or not) whatever they were working on before we switch maps.
     if not unreal.EditorLoadingAndSavingUtils.save_dirty_packages_with_dialog(True, True):
@@ -701,26 +748,41 @@ def _confirm(message):
     return answer == unreal.AppReturnType.YES
 
 
+def _mode_text():
+    if source_control_enabled():
+        return ("Source control is connected:\n"
+                "- Changed maps are checked out (default changelist) and saved.\n"
+                "- Nothing is submitted; review and submit yourself.\n"
+                "- Maps that are out of date or checked out by someone else are skipped.\n")
+    return ("No source control connected - LOCAL MODE:\n"
+            "- Changed maps are saved directly to disk. Back up the project first.\n"
+            "- Read-only files are skipped (never overwritten). If this is a Perforce\n"
+            "  project, click No and connect to source control first.\n")
+
+
+def _source_control_ok():
+    if REQUIRE_SOURCE_CONTROL and not source_control_enabled():
+        unreal.EditorDialog.show_message(
+            "Light Mobility Tool",
+            "Not connected to source control (REQUIRE_SOURCE_CONTROL is True).\n\n"
+            "Connect first (Revision Control button, bottom-right of the editor), then try again.",
+            unreal.AppMsgType.OK)
+        return False
+    return True
+
+
 def enable(all_maps=True, ask=True):
     """Turn ON: make every light in every map Movable (or just the open level)."""
     global _enabled
     if all_maps:
-        if REQUIRE_SOURCE_CONTROL and not source_control_enabled():
-            unreal.EditorDialog.show_message(
-                "Light Mobility Tool",
-                "Not connected to source control.\n\nConnect to Perforce first "
-                "(Revision Control button, bottom-right of the editor), then try again.",
-                unreal.AppMsgType.OK)
+        if not _source_control_ok():
             return
         maps = find_all_maps()
         if ask and not _confirm(
-                "Set every light to Movable in all {} map(s) under {}?\n\n"
-                "- Changed maps are checked out in Perforce (default changelist) and saved.\n"
-                "- Nothing is submitted; review and submit in P4V yourself.\n"
-                "- Maps that are out of date or checked out by someone else are skipped.\n"
+                "Set every light to Movable in all {} map(s) under {}?\n\n{}\n"
                 "- Original mobility is remembered, so turning the tool off restores it.\n\n"
                 "Tip: run 'Light Mobility: Preview' first to see what will change."
-                .format(len(maps), ", ".join(MAP_ROOTS))):
+                .format(len(maps), ", ".join(MAP_ROOTS), _mode_text())):
             return
         process_all_maps(True, maps)
     else:
@@ -736,17 +798,12 @@ def disable(all_maps=True, ask=True):
     global _enabled
     maps = None
     if all_maps:
-        if REQUIRE_SOURCE_CONTROL and not source_control_enabled():
-            unreal.EditorDialog.show_message(
-                "Light Mobility Tool",
-                "Not connected to source control.\n\nConnect to Perforce first, then try again.",
-                unreal.AppMsgType.OK)
+        if not _source_control_ok():
             return
         maps = find_all_maps()
         if ask and not _confirm(
-                "Restore every light's original mobility in all {} map(s)?\n\n"
-                "Changed maps are checked out in Perforce and saved (not submitted)."
-                .format(len(maps))):
+                "Restore every light's original mobility in all {} map(s)?\n\n{}"
+                .format(len(maps), _mode_text())):
             return
     _enabled = False
     _save_state()

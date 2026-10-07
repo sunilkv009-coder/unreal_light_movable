@@ -1,6 +1,11 @@
-# Installation guide: Light Mobility Tool (Unreal Engine 5 + Perforce)
+# Installation guide: Light Mobility Tool (Unreal Engine 5)
 
-This guide gets the tool into your project, shares it with your team through Perforce, and covers a safe first run.
+This guide gets the tool into your project and covers a safe first run. The tool works on any project:
+
+- **With Perforce:** connect in the editor (step 6) and the tool checks files out before saving them.
+- **Without source control:** the tool saves maps directly to disk ("local mode"). Back up your project first.
+
+The Perforce-only steps are marked **(Perforce)**. Skip them on a normal project.
 
 **Supported:** Unreal Engine 5.0 and later. 5.1+ is recommended, because World Partition support needs 5.1.
 It works in Blueprint-only and C++ projects. You don't need to compile anything; it's a content-only plugin that uses Python.
@@ -40,9 +45,9 @@ YourProject/
 > Common mistake: unzipping creates `Plugins/LightMobilityTool/LightMobilityTool/...`, one folder too deep.
 > The `.uplugin` file has to sit directly in `Plugins/LightMobilityTool/`.
 
-## 3. Add it to Perforce, so the whole team gets it
+## 3. (Perforce) Add it to Perforce, so the whole team gets it
 
-Skip this step if only you need the tool.
+Skip this step if you don't use Perforce, or only you need the tool.
 
 1. In P4V, open your workspace and go to `YourProject/Plugins/LightMobilityTool`.
 2. Right-click the folder and choose **Mark for Add...**. Add these 3 files to a new changelist named something like *"Add Light Mobility Tool plugin"*:
@@ -79,9 +84,14 @@ Skip this step if only you need the tool.
 
 If the menu items are missing, see [Troubleshooting](#troubleshooting) below.
 
-## 6. Connect to Perforce inside Unreal
+## 6. (Perforce) Connect to Perforce inside Unreal
 
-The tool won't change any maps until the editor is connected to source control. This is deliberate.
+**No source control?** Skip this step. Just make a backup copy of your project folder (or commit it, if you use Git)
+before the first run.
+
+On a Perforce project, always connect before running the tool. If you forget, the tool doesn't break anything:
+Perforce keeps files read-only, so the tool skips them and the report tells you to connect. But it won't get
+any work done either.
 
 1. Click **Revision Control** (or **Source Control** in older versions), at the bottom-right of the editor.
 2. Choose **Connect to Revision Control → Perforce**.
@@ -90,20 +100,23 @@ The tool won't change any maps until the editor is connected to source control. 
 
 ## 7. First run (do these in order)
 
-1. **Get Latest** in P4V, so every map is at the latest revision. The tool skips maps that are out of date.
-2. Ask your team to check in, or at least release, any maps they have checked out. The tool skips maps someone else has locked.
+1. **(Perforce)** **Get Latest** in P4V, so every map is at the latest revision. The tool skips maps that are out of date.
+   **(No source control)** Back up your project folder.
+2. **(Perforce)** Ask your team to check in, or at least release, any maps they have checked out. The tool skips maps someone else has locked.
 3. Run **Tools → Light Mobility: Preview (no changes)**.
    - It opens every map and lists the lights it would change. It doesn't modify, check out or save anything.
    - When it finishes, it shows a summary and the path of a full report (`Saved/Logs/LightMobilityTool_<date>.txt`).
-4. Read the report. If it looks right, click **Tools → Force Lights Movable (All Maps)** and confirm.
+4. Read the report. If it looks right, click **Tools → Force Lights Movable (All Maps)**.
+   The confirm dialog says which mode it will use, **source control** or **LOCAL MODE**. Check that's the mode you expect, then click **Yes**.
 5. When it finishes, read the summary and the report. It lists every map and light that was skipped, and why.
-6. In P4V, open your **default changelist**:
+6. **(No source control)** You're done. Open a couple of maps and check the lighting.
+7. **(Perforce)** In P4V, open your **default changelist**:
    - It contains the maps the tool changed. For World Partition maps, it also contains the actor files in `__ExternalActors__`.
    - Open a couple of maps in the editor and check the lighting.
    - Then **Submit**. The tool never submits for you.
 
 To undo everything, untick **Force Lights Movable (All Maps)**. It goes through every map again, puts each light back to its original Static or Stationary setting, checks out the files and saves them, ready for you to submit.
-If you haven't submitted yet, you can also just **Revert** the changelist in P4V.
+If you haven't submitted yet, you can also just **Revert** the changelist in P4V. Without source control, you can restore your backup.
 
 ## 8. What the tool will never do
 
@@ -112,7 +125,7 @@ If you haven't submitted yet, you can also just **Revert** the changelist in P4V
 - Change a map that isn't at the latest revision.
 - Submit to Perforce.
 - Run while Play-In-Editor is active.
-- Run the all-maps pass while you're disconnected from Perforce, as long as `REQUIRE_SOURCE_CONTROL = True`, which is the default.
+- Overwrite a read-only file in local mode.
 
 ## 9. Settings (optional)
 
@@ -121,7 +134,7 @@ These are at the top of `Plugins/LightMobilityTool/Content/Python/light_mobility
 | Setting | Default | Meaning |
 |---|---|---|
 | `MAP_ROOTS` | `["/Game"]` | Folders searched for maps. Use `["/Game/Maps"]` to narrow it, or add `"/MyPlugin"` to include plugin maps. |
-| `REQUIRE_SOURCE_CONTROL` | `True` | Refuse to run the all-maps pass when not connected to Perforce. |
+| `REQUIRE_SOURCE_CONTROL` | `False` | `False` works on any project (local mode when not connected). Set it to `True` to refuse to run unless connected to Perforce. |
 | `SKIP_FILES_CHECKED_OUT_BY_OTHERS` | `True` | Leave files locked by teammates alone. |
 | `SKIP_OUT_OF_DATE_FILES` | `True` | Leave files that aren't at head revision alone. |
 | `WP_ACTOR_BATCH_SIZE` | `500` | How many World Partition actors are loaded at once. Lower it if you run out of memory. |
@@ -137,7 +150,11 @@ After editing the file, restart the editor.
 - Look in the Output Log for Python errors.
 
 **"Not connected to source control"**
-- Connect to Perforce as described in step 6.
+- This only appears when `REQUIRE_SOURCE_CONTROL = True`. Connect as described in step 6, or set it back to `False`.
+
+**Maps listed as "file is read-only on disk"**
+- **Perforce project:** you aren't connected. Connect (step 6) and run again.
+- **Normal project:** the file has its read-only flag set. On Windows, right-click it, choose **Properties**, untick **Read-only**, then run again.
 
 **Maps listed as "not at latest revision"**
 - Do **Get Latest** in P4V, restart the editor and run the tool again.

@@ -43,10 +43,12 @@ assert a.comps[0].props["mobility"] == M.STATIONARY
 assert r.lights_changed == 6, r.lights_changed
 print("preview: would change", r.lights_changed, "skipped maps", r.maps_skipped)
 
-# Not connected -> refuses
+# Not connected + REQUIRE_SOURCE_CONTROL -> refuses
 S.sc = False
+lmt.REQUIRE_SOURCE_CONTROL = True
 r = lmt.process_all_maps(True, show_report=False)
 assert r.errors and r.maps_done == 0 and a.comps[0].props["mobility"] == M.STATIONARY
+lmt.REQUIRE_SOURCE_CONTROL = False
 S.sc = True
 
 # Enable
@@ -82,4 +84,30 @@ S.files["/Game/__ExternalActors__/Maps/W/1/BB"] = U.FState(is_checked_out_other=
 r = lmt.process_all_maps(True, show_report=False)
 assert wp1.comps[0].props["mobility"] == M.STATIC and wp2.comps[0].props["mobility"] == M.MOVABLE
 print("skipped lights:", r.lights_skipped)
+# Local mode (no source control): writable maps saved directly, read-only skipped
+import os, stat
+a, a2, sub, b, c, wpi, wp1, wp2 = setup()
+S.sc = False
+os.makedirs(os.path.join(U.CONTENT, "Maps"), exist_ok=True)
+for name in ("A", "Sub", "B", "C", "W"):
+    path = os.path.join(U.CONTENT, "Maps", name + ".umap")
+    if os.path.exists(path): os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    open(path, "w").close()
+ro = os.path.join(U.CONTENT, "Maps", "B.umap")
+os.chmod(ro, stat.S_IREAD)
+assert not lmt.source_control_enabled()
+r = lmt.process_all_maps(True, show_report=False)
+assert not r.errors, r.errors
+assert a.comps[0].props["mobility"] == M.MOVABLE
+assert c.comps[0].props["mobility"] == M.MOVABLE, "local mode: no out-of-date concept"
+assert b.comps[0].props["mobility"] == M.STATIC, "read-only file must be left alone"
+assert any("read-only" in reason for _, reason in r.maps_skipped), r.maps_skipped
+assert not S.checkouts
+assert "/Game/Maps/B" not in S.saved and "/Game/Maps/C" in S.saved
+print("local mode: changed", r.lights_changed, "skipped", r.maps_skipped)
+lmt.disable(ask=False)
+assert a.comps[0].props["mobility"] == M.STATIONARY and c.comps[0].props["mobility"] == M.STATIC
+print("local mode restore OK")
+os.chmod(ro, stat.S_IWRITE | stat.S_IREAD)
+S.sc = True
 print("ALL TESTS PASSED")

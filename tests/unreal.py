@@ -5,9 +5,17 @@ logs = []
 def log(m): logs.append(("log", m))
 def log_warning(m): logs.append(("warn", m))
 def log_error(m): logs.append(("err", m))
+import os
+CONTENT = tempfile.mkdtemp()
 class Paths:
     @staticmethod
     def project_saved_dir(): return SAVED
+    @staticmethod
+    def project_content_dir(): return CONTENT
+    @staticmethod
+    def project_plugins_dir(): return os.path.join(CONTENT, "..", "NoPlugins")
+    @staticmethod
+    def convert_relative_path_to_full(p): return os.path.abspath(p)
 class ComponentMobility(enum.Enum):
     STATIC = 0; STATIONARY = 1; MOVABLE = 2
 class Name(str): pass
@@ -81,7 +89,11 @@ class EditorLoadingAndSavingUtils:
     @staticmethod
     def save_packages(pkgs, only_dirty):
         for p in pkgs:
-            assert STATE.files.get(p.get_name(), FState()).d["is_checked_out"], "saved without checkout: " + p.get_name()
+            if STATE.sc:
+                assert STATE.files.get(p.get_name(), FState()).d["is_checked_out"], "saved without checkout: " + p.get_name()
+            else:
+                f = Paths.project_content_dir() + p.get_name()[len("/Game"):] + ".umap"
+                assert not os.path.exists(f) or os.access(f, os.W_OK), "overwrote read-only file " + f
             STATE.saved.append(p.get_name()); DIRTY.discard(p.get_name())
         return True
     @staticmethod

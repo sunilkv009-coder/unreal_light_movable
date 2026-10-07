@@ -14,14 +14,31 @@ Adds a checkbox to the editor: **Tools → Force Lights Movable (All Maps)**.
 - The on/off state is saved in `Saved/LightMobilityTool.json` and persists across editor restarts.
 - The tool doesn't change anything while Play-In-Editor is running.
 
-## Perforce safety
+## Works with or without source control
 
-- **Connection required:** the all-maps pass refuses to start unless the editor is connected to Perforce.
+The tool checks whether the editor is connected to source control and picks a mode automatically:
+
+| | **Source control mode** (Perforce connected) | **Local mode** (no source control, or not connected) |
+|---|---|---|
+| Saving | Checks out each file, then saves it | Saves straight to disk |
+| Read-only files | Checked out first, or skipped if that fails | Skipped, never overwritten |
+| Out-of-date / locked by others | Skipped | Not applicable |
+| Submits | Never | Not applicable |
+
+The confirm dialog tells you which mode it's about to use.
+In local mode on a normal project, back up or commit your project first, because maps are saved directly.
+
+Local mode is still safe on a Perforce project where you forgot to connect. Perforce keeps files read-only until
+they're checked out, so the tool skips them instead of overwriting them, and the report tells you to connect.
+To make Perforce mandatory, set `REQUIRE_SOURCE_CONTROL = True`.
+
+## Perforce safety (source control mode)
+
 - **Skipped maps:** maps that aren't at the latest revision, or are checked out by someone else, are skipped entirely and listed in the report.
 - **Checkout first:** a light is changed only after its file has been checked out. That's the `.umap`, or the actor's own file in `__ExternalActors__` for World Partition. If the checkout fails, the light is left alone.
 - **No forced saves:** files that can't be checked out are never saved, and read-only files are never overwritten.
 - **No submits:** nothing is submitted. Changes go to your default changelist, so you can review and submit them in P4V.
-- **Report:** every run writes a report to `Saved/Logs/LightMobilityTool_<date>.txt` listing every change and skip.
+- **Report:** every run, in either mode, writes a report to `Saved/Logs/LightMobilityTool_<date>.txt` listing every change and skip.
 - **Preview:** **Tools → Light Mobility: Preview (no changes)** shows what would change without touching any file.
 
 ## Install
@@ -31,7 +48,8 @@ See **[INSTALL.md](INSTALL.md)** for the full step-by-step guide, including addi
 Short version:
 1. Copy the `LightMobilityTool` folder to `YourProject/Plugins/LightMobilityTool/`.
 2. Restart the editor and accept enabling the plugin.
-3. Connect to Perforce in the editor, then run **Tools → Light Mobility: Preview (no changes)**.
+3. On a Perforce project, connect to Perforce in the editor. On a normal project, back up first.
+   Then run **Tools → Light Mobility: Preview (no changes)**.
 4. Then run **Tools → Force Lights Movable (All Maps)**.
 
 ## Use from Python or the console
