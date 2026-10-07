@@ -163,6 +163,26 @@ The performance tool has two parts:
   These work with nothing else installed.
 - **The tab** (`PerformanceOptimizerUI`) is a small C++ editor plugin that draws the window with the toggles. It has to be compiled once.
 
+### 10-easy. One double-click (recommended)
+
+1. Install **Visual Studio 2022 Community** (free) with the workloads **Game development with C++**,
+   **Desktop development with C++** and **.NET desktop development**, then restart the PC. You only do this once.
+2. Close Unreal.
+3. In the downloaded repository folder, double-click **`Build-PerformanceOptimizerUI.bat`**.
+   You can also drag your `.uproject` onto it.
+4. Pick your `.uproject` when asked. The script then:
+   - finds your engine and checks Visual Studio;
+   - compiles the tab with Unreal's own build tool, which takes a few minutes;
+   - copies it to `YourProject/Plugins/PerformanceOptimizerUI/`;
+   - installs or updates `LightMobilityTool` if needed, asking you first.
+5. Open the project and go to **Tools → Performance Improvements...**
+
+The script never submits anything and never overwrites read-only (Perforce) files. If the plugin folder is already in
+Perforce, it tells you to check it out first. If the build fails, it prints the error lines and the log path. Send those
+to get the code fixed.
+
+The manual ways to do the same thing are below.
+
 ### 10a. C++ project (has a `Source/` folder)
 
 1. Copy the `PerformanceOptimizerUI` folder to `YourProject/Plugins/PerformanceOptimizerUI/`.
