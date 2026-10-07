@@ -1,4 +1,12 @@
-# Light Mobility Tool (Unreal Engine 5 editor plugin)
+# Light Mobility Tool + Performance Improvements (Unreal Engine 5 editor plugins)
+
+This repository has two tools:
+
+- **Light Mobility Tool:** makes every light in every map Movable, safely. It's described below.
+- **Performance Improvements tab:** scans the project and level, gives per-setting toggles with suggestions,
+  and runs an Auto Optimize with before/after FPS. Textures are never touched. See **[PERFORMANCE.md](PERFORMANCE.md)**.
+
+---
 
 Adds a checkbox to the editor: **Tools → Force Lights Movable (All Maps)**.
 
@@ -130,6 +138,15 @@ That only covers the open level. The Python plugin also goes through every map a
 - On a large project, going through every map can take a while. Commit or back up first, and test on a copy before running it.
 
 ## Tests
+
+`python3 tests/test_perf.py` tests the Performance Improvements logic:
+- the texture deny list;
+- scanning;
+- session-only toggles;
+- Auto Optimize at both impact levels, with measurement;
+- Save to Project restoring `DefaultEngine.ini` byte for byte;
+- read-only config files;
+- the level toggle's safety check.
 
 `python3 tests/test_tool.py` runs the tool's logic against a fake `unreal` module. It covers:
 - preview mode, and refusing to run when disconnected from Perforce

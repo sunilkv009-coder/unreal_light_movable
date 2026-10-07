@@ -402,8 +402,11 @@ def _package_file(pkg_name):
 
 
 def _check_local_file(pkg_name):
-    """Local mode (no source control): only refuse files that are read-only."""
-    path = _package_file(pkg_name)
+    """Local mode (no source control): only refuse files that are read-only.
+    Accepts a package name (/Game/...) or an absolute file path."""
+    # Package names (/Game/...) also look like absolute paths, so only treat
+    # the argument as a file path when that file really exists.
+    path = pkg_name if os.path.isfile(pkg_name) else _package_file(pkg_name)
     # Perforce marks files read-only via the permission bits, so check those
     # as well as os.access (which is always True for admin/root users).
     if path and (not os.access(path, os.W_OK) or not (os.stat(path).st_mode & stat.S_IWUSR)):

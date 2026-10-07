@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Performance Improvements (Tab)",
+	"Description": "Dockable 'Performance Improvements' editor tab: scan, per-setting toggles with suggestions, Auto Optimize with before/after FPS. Needs the Light Mobility Tool plugin (perf_optimizer.py) in the same project.",
+	"Category": "Editor",
+	"CreatedBy": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "PerformanceOptimizerUI",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true
+		}
+	]
+}

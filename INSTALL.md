@@ -154,6 +154,62 @@ These are at the top of `Plugins/LightMobilityTool/Content/Python/light_mobility
 
 After editing the file, restart the editor.
 
+## 10. Performance Improvements tab
+
+The performance tool has two parts:
+
+- **The logic** (`perf_optimizer.py`) is already in the `LightMobilityTool` plugin from step 2. Once that's installed, the
+  **Tools** menu has **Performance: Scan (report)**, **Performance: Auto Optimize (session only)** and **Performance: Revert All**.
+  These work with nothing else installed.
+- **The tab** (`PerformanceOptimizerUI`) is a small C++ editor plugin that draws the window with the toggles. It has to be compiled once.
+
+### 10a. C++ project (has a `Source/` folder)
+
+1. Copy the `PerformanceOptimizerUI` folder to `YourProject/Plugins/PerformanceOptimizerUI/`.
+2. Right-click `YourProject.uproject` and choose **Generate Visual Studio project files**.
+3. Build the editor target (Development Editor, Win64) in Visual Studio or Rider.
+   Alternatively, open the `.uproject` and click **Yes** when Unreal asks to rebuild the missing modules.
+4. Open the editor and go to **Tools → Performance Improvements...**.
+
+### 10b. Blueprint-only project (no `Source/` folder)
+
+Build the plugin once on a machine with Visual Studio installed:
+
+```bat
+"C:\Program Files\Epic Games\UE_5.4\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin ^
+  -Plugin="C:\path\to\PerformanceOptimizerUI\PerformanceOptimizerUI.uplugin" ^
+  -Package="C:\Temp\PerformanceOptimizerUI_Built" -TargetPlatforms=Win64
+```
+
+Use your engine version in the path. Then copy `C:\Temp\PerformanceOptimizerUI_Built` to `YourProject/Plugins/PerformanceOptimizerUI/`.
+It now contains `Binaries/`, so people without Visual Studio can use it.
+
+### 10c. Perforce
+
+- Submit `Plugins/PerformanceOptimizerUI/` (`.uplugin`, `Source/`, and `Binaries/` if you built it for artists without compilers).
+- Don't submit `Intermediate/`.
+- Submit the updated `Plugins/LightMobilityTool/Content/Python/` files as well.
+
+### 10d. First use, the safe way
+
+1. Open the level you stream and set the viewport to **Realtime** (Ctrl+R).
+2. Open **Tools → Performance Improvements...**. It scans automatically.
+3. Read the orange suggestions and the **Visual change** label on each row. The **Texture quality** row at the bottom should be green.
+4. Click **Auto Optimize** with **Allow low visual impact** unticked first. Then try it ticked, and compare the look closely:
+   paint, chrome, glass, badges, stitching and shadows under the car.
+5. Try individual toggles. Use **Measure FPS** before and after each one to see its effect.
+6. When you're happy, click **Save to Project**. Check the list of lines it shows, then submit `Config/DefaultEngine.ini` in P4V.
+7. If you're not happy, click **Revert All** or restart the editor. Nothing is kept unless you saved it.
+
+The full list of settings and how each one is protected is in **[PERFORMANCE.md](PERFORMANCE.md)**.
+
+### Troubleshooting the tab
+
+- **"Python is not available"**: enable **Python Editor Script Plugin** and restart.
+- **"The Python call failed"**: make sure `LightMobilityTool` is installed and up to date. Errors are in the Output Log under `[PerformanceOptimizer]`.
+- **"The level viewport is not in Realtime mode"**: click in the viewport and press **Ctrl+R**.
+- **The numbers jump around**: close other heavy apps, keep the editor focused, don't move the camera, and run again.
+
 ## Troubleshooting
 
 **No menu items under Tools**

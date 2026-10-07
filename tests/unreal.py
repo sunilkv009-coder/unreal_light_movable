@@ -16,6 +16,9 @@ class Paths:
     def project_plugins_dir(): return os.path.join(CONTENT, "..", "NoPlugins")
     @staticmethod
     def convert_relative_path_to_full(p): return os.path.abspath(p)
+    @staticmethod
+    def project_config_dir(): return CONFIG
+CONFIG = tempfile.mkdtemp()
 class ComponentMobility(enum.Enum):
     STATIC = 0; STATIONARY = 1; MOVABLE = 2
 class Name(str): pass
@@ -38,13 +41,15 @@ class SceneComponent(Obj):
     def __init__(s, owner, mob, name, parent=None, editor_only=False):
         super().__init__(owner._pkg); s.owner = owner; s.name = name; s.parent = parent; s.children = []
         s.props = {"mobility": mob, "component_tags": [], "is_editor_only": editor_only,
-                   "intensity": 5.0, "light_color": (1, 1, 1)}
+                   "intensity": 5.0, "light_color": (1, 1, 1), "cast_shadows": True,
+                   "cast_volumetric_shadow": True, "volumetric_scattering_intensity": 1.0,
+                   "attenuation_radius": 1000.0, "light_function_material": None}
         if parent: parent.children.append(s)
     def get_owner(s): return s.owner
     def get_name(s): return s.name
     def get_editor_property(s, k): return s.props[k]
     def set_editor_property(s, k, v):
-        if s.props[k] != v: DIRTY.add(s._pkg)
+        if s.props.get(k) != v: DIRTY.add(s._pkg)
         s.props[k] = v
         if k == "mobility" and SIDE_EFFECT[0]: SIDE_EFFECT[0](s)
     def get_world_location(s): return Vec(*s.owner.loc)
@@ -60,7 +65,18 @@ class SceneComponent(Obj):
         return out
 SIDE_EFFECT = [None]
 class LightComponentBase(SceneComponent): pass
-class Comp(LightComponentBase):
+class LocalLightComponent(LightComponentBase): pass
+class SkyLightComponent(LightComponentBase):
+    def __init__(s, owner, mob):
+        super().__init__(owner, mob, "SkyLightComponent0"); s.props["real_time_capture"] = True
+class ExponentialHeightFogComponent(SceneComponent):
+    def __init__(s, owner, volumetric):
+        super().__init__(owner, MOVABLE_DEFAULT[0], "Fog"); s.props["enable_volumetric_fog"] = volumetric
+MOVABLE_DEFAULT = [None]
+class StaticMeshComponent(SceneComponent): pass
+class InstancedStaticMeshComponent(StaticMeshComponent): pass
+class PostProcessVolume: pass
+class Comp(LocalLightComponent):
     def __init__(s, owner, mob): super().__init__(owner, mob, "LightComponent0")
 class Actor(Obj):
     def __init__(s, label, pkg, mobs):
@@ -68,7 +84,7 @@ class Actor(Obj):
         s.comps = [Comp(s, m) for m in mobs]; s.others = []
     def get_actor_label(s): return s.label
     def get_components_by_class(s, c):
-        return list(s.comps) if c is LightComponentBase else list(s.comps) + list(s.others)
+        return [x for x in list(s.comps) + list(s.others) if isinstance(x, c)]
     def get_actor_location(s): return Vec(*s.loc)
     def get_actor_rotation(s): return Rot(0, 0, s.yaw)
     def get_actor_scale3d(s): return Vec(1, 1, 1)
@@ -89,6 +105,7 @@ class LevelEditorSubsystem:
         return True
 class EditorActorSubsystem:
     def get_all_level_actors(s): return list(STATE.loaded) + list(getattr(STATE, "wp_loaded", []))
+    def set_selected_level_actors(s, actors): STATE.selected = list(actors)
 def get_editor_subsystem(c): return c()
 class ScopedEditorTransaction:
     def __init__(s, n): pass
@@ -162,10 +179,30 @@ DIALOGS = []
 class EditorDialog:
     @staticmethod
     def show_message(t, m, k): DIALOGS.append(m); return AppReturnType.YES
-def register_slate_post_tick_callback(f): return 1
+TICKS = []
+def register_slate_post_tick_callback(f): TICKS.append(f); return len(TICKS)
+CVARS = {}
+class SystemLibrary:
+    @staticmethod
+    def get_engine_version(): return ENGINE_VERSION[0]
+    @staticmethod
+    def get_console_variable_float_value(n): return float(CVARS.get(n, 0.0))
+    @staticmethod
+    def execute_console_command(world, cmd):
+        name, value = cmd.split(" ", 1)
+        if name in READ_ONLY: return
+        CVARS[name] = float(value)
+ENGINE_VERSION = ["5.4.4-0+++UE5+Release-5.4"]
+READ_ONLY = set()
 def unregister_slate_post_tick_callback(h): pass
 def uclass(): return lambda c: c
 def ufunction(**kw): return lambda f: f
 class ToolMenuEntryScript: pass
 class CheckBoxState(enum.Enum):
     CHECKED = 0; UNCHECKED = 1
+class ToolMenus:
+    @staticmethod
+    def get():
+        class _M:
+            def find_menu(s, name): return None
+        return _M()
