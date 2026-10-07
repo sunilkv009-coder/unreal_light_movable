@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Light Mobility Tool",
+	"Description": "Editor toggle that forces every light in the open level to Movable, and restores the original mobility when switched off.",
+	"Category": "Editor",
+	"CreatedBy": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Plugins": [
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		}
+	]
+}
