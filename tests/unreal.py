@@ -53,7 +53,7 @@ class SceneComponent(Obj):
         s.props[k] = v
         if k == "mobility" and SIDE_EFFECT[0]: SIDE_EFFECT[0](s)
     def get_world_location(s): return Vec(*s.owner.loc)
-    def get_world_rotation(s): return Rot(0, 0, s.owner.yaw)
+    def get_world_rotation(s): return Rot(s.owner.roll, s.owner.pitch, s.owner.yaw)
     def get_world_scale(s): return Vec(1, 1, 1)
     def get_world_transform(s): return (tuple(s.owner.loc), s.owner.yaw)
     def set_world_transform(s, t, sweep, teleport): s.owner.loc, s.owner.yaw = list(t[0]), t[1]
@@ -74,6 +74,9 @@ class ExponentialHeightFogComponent(SceneComponent):
         super().__init__(owner, MOVABLE_DEFAULT[0], "Fog"); s.props["enable_volumetric_fog"] = volumetric
 MOVABLE_DEFAULT = [None]
 class StaticMeshComponent(SceneComponent): pass
+class ArrowComponent(SceneComponent): pass
+class DirectionalLightComponent(LightComponentBase):
+    def __init__(s, owner, mob): super().__init__(owner, mob, "LightComponent0")
 class InstancedStaticMeshComponent(StaticMeshComponent): pass
 class PostProcessVolume: pass
 class Comp(LocalLightComponent):
@@ -81,12 +84,13 @@ class Comp(LocalLightComponent):
 class Actor(Obj):
     def __init__(s, label, pkg, mobs):
         super().__init__(pkg); s.label = label; s.loc = [0.0, 0.0, 0.0]; s.yaw = 0.0
+        s.pitch = 0.0; s.roll = 0.0
         s.comps = [Comp(s, m) for m in mobs]; s.others = []
     def get_actor_label(s): return s.label
     def get_components_by_class(s, c):
         return [x for x in list(s.comps) + list(s.others) if isinstance(x, c)]
     def get_actor_location(s): return Vec(*s.loc)
-    def get_actor_rotation(s): return Rot(0, 0, s.yaw)
+    def get_actor_rotation(s): return Rot(s.roll, s.pitch, s.yaw)
     def get_actor_scale3d(s): return Vec(1, 1, 1)
     def get_actor_transform(s): return (tuple(s.loc), s.yaw)
     def set_actor_transform(s, t, sweep, teleport): s.loc, s.yaw = list(t[0]), t[1]

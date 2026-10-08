@@ -170,4 +170,32 @@ r = lmt.process_all_maps(True, maps=["/Game/Maps/Car3"], show_report=False)
 U.SIDE_EFFECT[0] = None
 assert x.comps[0].props["mobility"] == M.STATIC and "/Game/Maps/Car3" not in S.saved
 assert any("intensity" in e for e in r.errors), r.errors
+# ---- Directional light (sun) ----
+lmt._blocked.clear(); S.saved = []
+sun = U.Actor("DirectionalLight", "/Game/Maps/Sun", [])
+sun.comps = [U.DirectionalLightComponent(sun, M.STATIONARY)]
+sun.pitch, sun.yaw = -90.0, 30.0
+# Its arrow is a static, non-flagged helper: must not block the light
+U.ArrowComponent(sun, M.STATIC, "ArrowComponent0", parent=sun.comps[0])
+sun.others = list(sun.comps[0].children)
+S.maps["/Game/Maps/Sun"] = {"actors": [sun]}
+# Re-registering at pitch -90 returns the SAME orientation as different euler numbers
+def euler_flip(comp):
+    if comp.owner is sun and sun.pitch == -90.0 and sun.yaw == 30.0:
+        sun.roll, sun.yaw = 30.0, 0.0
+U.SIDE_EFFECT[0] = euler_flip
+r = lmt.process_all_maps(True, maps=["/Game/Maps/Sun"], show_report=False)
+U.SIDE_EFFECT[0] = None
+assert sun.comps[0].props["mobility"] == M.MOVABLE, (r.errors, r.lights_skipped)
+assert not r.errors and not r.lights_skipped
+assert "/Game/Maps/Sun" in S.saved
+# A real rotation of the sun is still caught
+lmt._blocked.clear(); S.saved = []
+sun.comps[0].props["mobility"] = M.STATIONARY; sun.comps[0].props["component_tags"] = []
+sun.pitch, sun.yaw, sun.roll = -45.0, 30.0, 0.0
+U.SIDE_EFFECT[0] = lambda comp: setattr(sun, "yaw", 31.0) if comp.owner is sun else None
+r = lmt.process_all_maps(True, maps=["/Game/Maps/Sun"], show_report=False)
+U.SIDE_EFFECT[0] = None
+assert sun.comps[0].props["mobility"] == M.STATIONARY and any("rotated" in e for e in r.errors), r.errors
+print("directional light OK")
 print("ALL TESTS PASSED")

@@ -37,8 +37,10 @@ After every change it checks that nothing else changed:
    - the file that light lives in is **not saved**;
    - the problem is listed under ERRORS in the report.
 4. **Lights with non-movable things attached**, such as a lamp-shade mesh under a spot light, are skipped and reported.
-   Unreal could force those attached things to Movable as well. Editor-only helpers, like the arrow on a directional light, are ignored.
-5. **Saving:** only the files that contain lights the tool changed are saved. Anything else Unreal marks as modified when it opens a map is thrown away.
+   Unreal could force those attached things to Movable as well. Editor helpers, like the arrow on a directional light and light icon sprites, are ignored.
+   Lights driven by a sun/sky Blueprint (for example SunSky with its compass mesh) can be skipped for that reason, and the report names the attached part.
+5. **Rotation check:** rotation is compared as an actual orientation, not as pitch/yaw/roll numbers, so a sun pointing straight down (−90° pitch) isn't mistaken for a rotated one.
+6. **Saving:** only the files that contain lights the tool changed are saved. Anything else Unreal marks as modified when it opens a map is thrown away.
 
 **What does change visually.** Moving a light from Static or Stationary to Movable changes how Unreal renders it:
 baked lightmaps and shadow maps are no longer used, and shadows and GI become fully dynamic.

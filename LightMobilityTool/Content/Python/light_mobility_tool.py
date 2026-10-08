@@ -59,6 +59,7 @@ Python / Output Log (Cmd -> Python):
 
 import datetime
 import json
+import math
 import os
 import stat
 
@@ -531,7 +532,17 @@ def _vec(v):
 
 
 def _rot(r):
-    return (r.roll, r.pitch, r.yaw)
+    """Rotation as a quaternion (x, y, z, w), same formula as FRotator::Quaternion.
+    Comparing Euler angles is wrong for steep lights (a sun at -90 pitch): tiny
+    float noise can swap yaw and roll completely even though nothing moved."""
+    half = math.pi / 360.0
+    sp, cp = math.sin(r.pitch * half), math.cos(r.pitch * half)
+    sy, cy = math.sin(r.yaw * half), math.cos(r.yaw * half)
+    sr, cr = math.sin(r.roll * half), math.cos(r.roll * half)
+    return (cr * sp * sy - sr * cp * cy,
+            -cr * sp * cy - sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy)
 
 
 def _key(obj):
@@ -553,14 +564,17 @@ def _same(a, b):
         return str(a) == str(b)
 
 
-def _angle_diff(a, b):
-    return abs((a - b + 180.0) % 360.0 - 180.0)
+def _rotation_degrees(qa, qb):
+    """Angle in degrees between two orientations (quaternions from _rot)."""
+    dot = abs(sum(x * y for x, y in zip(qa, qb)))
+    return math.degrees(2.0 * math.acos(min(1.0, dot)))
 
 
 def _moved(before, after, tol, angles=False):
+    if angles:
+        return _rotation_degrees(before, after) > tol
     for x, y in zip(before, after):
-        d = _angle_diff(x, y) if angles else abs(x - y)
-        if d > tol:
+        if abs(x - y) > tol:
             return True
     return False
 
@@ -700,6 +714,10 @@ def _non_movable_children(comp):
     for child in children or []:
         if isinstance(child, unreal.LightComponentBase):
             continue
+        # Editor helpers (the directional light's arrow, light icon sprites) never
+        # render in the game, even if they aren't flagged as editor-only.
+        if any(cls is not None and isinstance(child, cls) for cls in _EDITOR_HELPER_CLASSES):
+            continue
         try:
             if child.get_editor_property("is_editor_only"):
                 continue
@@ -711,6 +729,9 @@ def _non_movable_children(comp):
         except Exception:
             pass
     return names
+
+
+_EDITOR_HELPER_CLASSES = [getattr(unreal, n, None) for n in ("ArrowComponent", "BillboardComponent")]
 
 
 # Lights whose change was undone by the safety check; never retried this session.
