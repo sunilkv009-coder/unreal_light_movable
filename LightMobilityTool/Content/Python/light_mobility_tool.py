@@ -597,7 +597,9 @@ def _component_state(comp):
             except Exception:
                 pass
         state["props"] = props
-    else:
+    elif not _is_editor_helper(comp):
+        # Unreal makes attached parts Movable together with the light; that's
+        # only a real change for parts that render in the game (not the arrow).
         state["mobility"] = comp.get_editor_property("mobility")
     return state
 
@@ -688,17 +690,8 @@ def _non_movable_children(comp):
     except Exception:
         return names
     for child in children or []:
-        if isinstance(child, unreal.LightComponentBase):
+        if isinstance(child, unreal.LightComponentBase) or _is_editor_helper(child):
             continue
-        # Editor helpers (the directional light's arrow, light icon sprites) never
-        # render in the game, even if they aren't flagged as editor-only.
-        if any(cls is not None and isinstance(child, cls) for cls in _EDITOR_HELPER_CLASSES):
-            continue
-        try:
-            if child.get_editor_property("is_editor_only"):
-                continue
-        except Exception:
-            pass
         try:
             if child.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE:
                 names.append(_light_label(child))
@@ -708,6 +701,17 @@ def _non_movable_children(comp):
 
 
 _EDITOR_HELPER_CLASSES = [getattr(unreal, n, None) for n in ("ArrowComponent", "BillboardComponent")]
+
+
+def _is_editor_helper(comp):
+    """Editor-only helpers (the directional light's arrow, light icon sprites)
+    never render in the game, even when they aren't flagged as editor-only."""
+    if any(cls is not None and isinstance(comp, cls) for cls in _EDITOR_HELPER_CLASSES):
+        return True
+    try:
+        return bool(comp.get_editor_property("is_editor_only"))
+    except Exception:
+        return False
 
 
 # Lights whose change was undone by the safety check; never retried this session.

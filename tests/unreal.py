@@ -51,6 +51,10 @@ class SceneComponent(Obj):
     def set_editor_property(s, k, v):
         if s.props.get(k) != v: DIRTY.add(s._pkg)
         s.props[k] = v
+        if k == "mobility" and v == ComponentMobility.MOVABLE:
+            # Unreal's SetMobility: "if we're now movable, all children should be updated as well"
+            for child in s.children:
+                child.set_editor_property("mobility", v)
         if k == "mobility" and SIDE_EFFECT[0]: SIDE_EFFECT[0](s)
     def get_world_location(s): return Vec(*s.owner.loc)
     def get_world_rotation(s): return Rot(s.owner.roll, s.owner.pitch, s.owner.yaw)
