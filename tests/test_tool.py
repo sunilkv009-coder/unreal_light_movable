@@ -198,4 +198,52 @@ r = lmt.process_all_maps(True, maps=["/Game/Maps/Sun"], show_report=False)
 U.SIDE_EFFECT[0] = None
 assert sun.comps[0].props["mobility"] == M.STATIONARY and any("rotated" in e for e in r.errors), r.errors
 print("directional light OK")
+
+# ---- Unsaved work is never thrown away (the lost Rect Light case) ----
+lmt._blocked.clear(); S.saved = []
+rect_map = "/Game/Maps/Rect"
+existing = U.Actor("ExistingLight", rect_map, [M.STATIC])
+S.maps[rect_map] = {"actors": [existing]}
+S.maps["/Game/Maps/Other"] = {"actors": [U.Actor("OtherLight", "/Game/Maps/Other", [M.STATIC])]}
+U.LevelEditorSubsystem().load_level(rect_map)
+new_rect = U.Actor("RectLight", rect_map, [M.STATIC])   # placed, not saved yet
+S.loaded.append(new_rect)
+U.DIRTY.add(rect_map)                                   # user clicked "Don't Save"
+loads = []
+orig_load = U.LevelEditorSubsystem.load_level
+U.LevelEditorSubsystem.load_level = lambda self, p: (loads.append(p), orig_load(self, p))[1]
+r = lmt.process_all_maps(True, maps=[rect_map, "/Game/Maps/Other"], show_report=False)
+U.LevelEditorSubsystem.load_level = orig_load
+assert not loads, "must not switch maps while something is unsaved"
+assert new_rect in S.loaded and new_rect.comps[0].props["mobility"] == M.STATIC
+assert r.errors and "unsaved" in r.errors[0] and r.maps_done == 0
+U.DIRTY.clear()
+print("unsaved guard OK")
+
+# ---- Every run goes through every map again; nothing remembered ----
+lmt._blocked.clear(); S.saved = []
+a1 = U.Actor("L1", "/Game/Maps/R1", [M.STATIC])
+a2 = U.Actor("L2", "/Game/Maps/R2", [M.STATIONARY])
+S.maps["/Game/Maps/R1"] = {"actors": [a1]}
+S.maps["/Game/Maps/R2"] = {"actors": [a2]}
+U.SIDE_EFFECT[0] = lambda comp: a2.loc.__setitem__(0, 9.0) if comp.owner is a2 else None
+r1 = lmt.process_all_maps(True, maps=["/Game/Maps/R1", "/Game/Maps/R2"], show_report=False)
+U.SIDE_EFFECT[0] = None
+a2.loc = [0.0, 0.0, 0.0]
+assert a1.comps[0].props["mobility"] == M.MOVABLE and a2.comps[0].props["mobility"] == M.STATIONARY
+r2 = lmt.process_all_maps(True, maps=["/Game/Maps/R1", "/Game/Maps/R2"], show_report=False)
+assert r2.maps_done == 2 and not r2.maps_skipped, "second run must process every map"
+assert a2.comps[0].props["mobility"] == M.MOVABLE, "light skipped in run 1 must be retried in run 2"
+assert len(r2.already_movable) == 1   # L1 from the first run
+print("rerun OK")
+
+# ---- No background watcher, no on/off memory ----
+old_state = os.path.join(U.SAVED, "LightMobilityTool.json")
+open(old_state, "w").write('{"enabled": true}')
+ticks_before = len(U.TICKS)
+lmt.startup()
+assert len(U.TICKS) == ticks_before, "startup must not start anything in the background"
+assert not os.path.exists(old_state), "old on/off memory must be removed"
+assert not hasattr(lmt, "toggle") and not hasattr(lmt, "is_enabled")
+print("no memory OK")
 print("ALL TESTS PASSED")

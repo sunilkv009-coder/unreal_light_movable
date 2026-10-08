@@ -2,17 +2,18 @@
 Light Mobility Tool
 ===================
 
-Editor toggle that forces every light in every map of the project to Movable.
+One-shot editor command that makes every light in every map Movable.
 
-* ON  -> every map under MAP_ROOTS (default: /Game) is opened one by one and
-         every light component (Point, Spot, Rect, Directional, Sky light,
-         plus light components inside Blueprint actors) is set to Movable,
-         then the map is saved. The original mobility is stored as a component
-         tag so it can be put back later. While ON, lights added to whatever
-         map is open are made Movable too.
-* OFF -> every map is opened again, every light the tool changed is set back
-         to its original mobility (Static / Stationary), the tag is removed and
-         the map is saved.
+* "Lights: Make All Movable (All Maps)" opens every map under MAP_ROOTS
+  (default: /Game) one by one, sets every light component (Point, Spot, Rect,
+  Directional, Sky light, plus light components inside Blueprint actors) to
+  Movable and saves the map. Then it's done - nothing keeps running in the
+  background and nothing is remembered between runs. Running it again goes
+  through every map again.
+* The original mobility is stored as a tag on each light, so
+  "Lights: Restore Original Mobility (All Maps)" can put it back.
+* Unsaved work is never thrown away: if anything is still unsaved after the
+  save prompt, the run doesn't start.
 
 Nothing moves
 -------------
@@ -51,14 +52,13 @@ touching any file.
 
 Python / Output Log (Cmd -> Python):
     import light_mobility_tool as lmt
-    lmt.preview_all_maps()      # read-only report
-    lmt.enable()                # ON  (all maps)
-    lmt.disable()               # OFF (all maps)
-    lmt.enable(all_maps=False)  # ON, open level only
+    lmt.preview_all_maps()          # read-only report
+    lmt.run_make_movable()          # all maps
+    lmt.run_restore()               # all maps
+    lmt.make_all_lights_movable()   # open level only (not saved)
 """
 
 import datetime
-import json
 import math
 import os
 import stat
@@ -112,9 +112,6 @@ LIGHT_PROPERTIES_TO_VERIFY = [
 # World Partition maps: how many actors to load into memory at once.
 WP_ACTOR_BATCH_SIZE = 500
 
-# While enabled, the open level is re-scanned this often (seconds).
-RESCAN_INTERVAL = 2.0
-
 # Prefix of the component tag that stores the original mobility.
 TAG_PREFIX = "LightMobilityTool.Original="
 
@@ -122,7 +119,8 @@ MENU_OWNER = "LightMobilityTool"
 MENU_NAME = "LevelEditor.MainMenu.Tools"
 MENU_SECTION = "LightMobilityTool"
 
-_STATE_FILE = os.path.join(unreal.Paths.project_saved_dir(), "LightMobilityTool.json")
+# Older versions remembered an on/off state here; it's deleted on startup.
+_OLD_STATE_FILE = os.path.join(unreal.Paths.project_saved_dir(), "LightMobilityTool.json")
 
 _MOBILITY_BY_NAME = {
     "STATIC": unreal.ComponentMobility.STATIC,
@@ -130,15 +128,7 @@ _MOBILITY_BY_NAME = {
     "MOVABLE": unreal.ComponentMobility.MOVABLE,
 }
 
-_enabled = False
-_tick_handle = None
-_time_since_scan = 0.0
 _batch_running = False
-_watcher_cache = {}
-_watcher_cache_time = 0.0
-
-# The watcher re-asks Perforce about files it couldn't check out this often.
-WATCHER_RETRY_SECONDS = 60.0
 
 
 # --------------------------------------------------------------------------
@@ -150,6 +140,7 @@ class _Report(object):
         self.title = title
         self.lines = []
         self.lights_changed = 0
+        self.already_movable = set()  # lights that were Movable already
         self.maps_done = 0
         self.maps_skipped = []      # (map, reason)
         self.lights_skipped = []    # (light, reason)
@@ -186,6 +177,7 @@ class _Report(object):
         out = [self.title, "=" * len(self.title), ""]
         out.append("Maps processed:   {}".format(self.maps_done))
         out.append("Lights changed:   {}".format(self.lights_changed))
+        out.append("Already Movable:  {}".format(len(self.already_movable)))
         out.append("Maps skipped:     {}".format(len(self.maps_skipped)))
         out.append("Lights skipped:   {}".format(len(self.lights_skipped)))
         out.append("Files not saved:  {}".format(len(self.files_not_saved)))
@@ -229,9 +221,9 @@ class _Report(object):
 
     def show(self):
         path = self.write()
-        summary = ("Maps processed: {}\nLights changed: {}\n\n"
+        summary = ("Maps processed: {}\nLights changed: {}\nAlready Movable: {}\n\n"
                    "Maps skipped: {}\nLights skipped: {}\nFiles NOT saved: {}\nErrors: {}\n"
-                   .format(self.maps_done, self.lights_changed, len(self.maps_skipped),
+                   .format(self.maps_done, self.lights_changed, len(self.already_movable), len(self.maps_skipped),
                            len(self.lights_skipped), len(self.files_not_saved), len(self.errors)))
         if self.has_problems:
             summary += "\nSome items were skipped - see the report for the reasons.\n"
@@ -331,22 +323,6 @@ def _belongs_to_map(pkg_name, map_package):
         return True
     prefix = _external_actors_prefix(map_package)
     return bool(prefix) and pkg_name.startswith(prefix)
-
-
-def _load_state():
-    try:
-        with open(_STATE_FILE, "r") as f:
-            return bool(json.load(f).get("enabled", False))
-    except (OSError, ValueError):
-        return False
-
-
-def _save_state():
-    try:
-        with open(_STATE_FILE, "w") as f:
-            json.dump({"enabled": _enabled}, f)
-    except OSError as e:
-        unreal.log_warning("[LightMobilityTool] Could not save state: {}".format(e))
 
 
 # --------------------------------------------------------------------------
@@ -804,7 +780,13 @@ def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=N
     """Set every non-movable light to Movable, remembering its original mobility.
     Only Mobility (and a tag) changes; this is verified after every batch."""
     guard = _EditGuard(report, map_package, _cache)
-    todo = [c for c in _light_components(actors)
+    comps = list(_light_components(actors))
+    if report is not None:
+        for c in comps:
+            if c.get_editor_property("mobility") == unreal.ComponentMobility.MOVABLE and (
+                    not map_package or _belongs_to_map(_package_name(c.get_owner() or c), map_package)):
+                report.already_movable.add(_key(c))
+    todo = [c for c in comps
             if c.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE
             and _key(c) not in _blocked]
     todo = [c for c in todo if guard.allow(c)]
@@ -983,10 +965,24 @@ def process_all_maps(make_movable=True, maps=None, dry_run=False, show_report=Tr
         "source control (files are checked out before saving)" if source_control_enabled()
         else "local - no source control connected (files saved directly; read-only files skipped)"))
 
-    # Let the user save (or not) whatever they were working on before we switch maps.
+    # Switching maps throws away unsaved changes without asking, so the run
+    # only starts when nothing is unsaved (e.g. a light you just placed).
     if not unreal.EditorLoadingAndSavingUtils.save_dirty_packages_with_dialog(True, True):
-        report.error("Cancelled by user at the save prompt.")
+        report.error("Cancelled at the save prompt - nothing was changed.")
+        if show_report:
+            report.show()
         return report
+    unsaved = _unsaved_packages()
+    if unsaved:
+        report.error("Not started: these are still unsaved and would be lost when the tool opens "
+                     "other maps: {}. Save them (File > Save All) and run again. Nothing was changed."
+                     .format(", ".join(unsaved[:10])))
+        if show_report:
+            report.show()
+        return report
+
+    # Every run starts fresh: lights skipped in an earlier run are tried again.
+    _blocked.clear()
 
     world = _editor_world()
     start_map = world.get_outermost().get_name() if world else None
@@ -1035,63 +1031,24 @@ def process_all_maps(make_movable=True, maps=None, dry_run=False, show_report=Tr
     return report
 
 
-def preview_all_maps():
+def _unsaved_packages():
+    try:
+        dirty = list(unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages())
+        dirty += list(unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages())
+    except Exception:
+        return []
+    return [p.get_name() for p in dirty]
+
+
+def preview_all_maps(make_movable=True):
     """Read-only: open every map and report which lights would change. Nothing is
     modified, checked out or saved."""
-    return process_all_maps(make_movable=not _enabled, dry_run=True)
+    return process_all_maps(make_movable=make_movable, dry_run=True)
 
 
 # --------------------------------------------------------------------------
-# Watcher: keeps new / changed lights Movable while enabled
+# Commands (each run does its job once and finishes)
 # --------------------------------------------------------------------------
-
-def _on_tick(delta_seconds):
-    global _time_since_scan, _watcher_cache_time
-
-    _time_since_scan += delta_seconds
-    if _time_since_scan < RESCAN_INTERVAL:
-        return
-    _time_since_scan = 0.0
-
-    if _batch_running or _editor_world() is None:
-        return
-    # Don't touch anything while Play-In-Editor is running.
-    if _level_editor().is_in_play_in_editor():
-        return
-    # Remember checkout results for a while so a file locked by someone else
-    # isn't queried on the Perforce server every couple of seconds.
-    _watcher_cache_time += RESCAN_INTERVAL
-    if _watcher_cache_time >= WATCHER_RETRY_SECONDS:
-        _watcher_cache.clear()
-        _watcher_cache_time = 0.0
-    try:
-        # Lights in files locked by others / out of date are skipped here too.
-        make_all_lights_movable(_cache=_watcher_cache)
-    except Exception as e:
-        unreal.log_warning("[LightMobilityTool] Rescan failed: {}".format(e))
-
-
-def _start_watcher():
-    global _tick_handle, _time_since_scan
-    if _tick_handle is None:
-        _time_since_scan = 0.0
-        _tick_handle = unreal.register_slate_post_tick_callback(_on_tick)
-
-
-def _stop_watcher():
-    global _tick_handle
-    if _tick_handle is not None:
-        unreal.unregister_slate_post_tick_callback(_tick_handle)
-        _tick_handle = None
-
-
-# --------------------------------------------------------------------------
-# Public on/off API
-# --------------------------------------------------------------------------
-
-def is_enabled():
-    return _enabled
-
 
 def _confirm(message):
     answer = unreal.EditorDialog.show_message(
@@ -1122,71 +1079,63 @@ def _source_control_ok():
     return True
 
 
+def run_make_movable(ask=True):
+    """Make every light in every map Movable, save, done. Nothing keeps running."""
+    if not _source_control_ok():
+        return None
+    maps = find_all_maps()
+    if ask and not _confirm(
+            "Set every light to Movable in all {} map(s) under {}?\n\n{}\n"
+            "- Save your work first: the run doesn't start while anything is unsaved.\n"
+            "- Original mobility is remembered as a tag on each light, so "
+            "'Restore Original Mobility' can put it back.\n"
+            "- Every map is processed every time you run this.\n\n"
+            "Tip: run 'Lights: Preview' first to see what will change."
+            .format(len(maps), ", ".join(MAP_ROOTS), _mode_text())):
+        return None
+    return process_all_maps(True, maps)
+
+
+def run_restore(ask=True):
+    """Put every light this tool changed back to its original mobility, in every map."""
+    if not _source_control_ok():
+        return None
+    maps = find_all_maps()
+    if ask and not _confirm(
+            "Restore every light's original mobility in all {} map(s)?\n\n{}"
+            .format(len(maps), _mode_text())):
+        return None
+    return process_all_maps(False, maps)
+
+
+# Old names, kept so existing scripts keep working. They no longer turn anything
+# "on" - they just run once.
 def enable(all_maps=True, ask=True):
-    """Turn ON: make every light in every map Movable (or just the open level)."""
-    global _enabled
-    if all_maps:
-        if not _source_control_ok():
-            return
-        maps = find_all_maps()
-        if ask and not _confirm(
-                "Set every light to Movable in all {} map(s) under {}?\n\n{}\n"
-                "- Original mobility is remembered, so turning the tool off restores it.\n\n"
-                "Tip: run 'Light Mobility: Preview' first to see what will change."
-                .format(len(maps), ", ".join(MAP_ROOTS), _mode_text())):
-            return
-        process_all_maps(True, maps)
-    else:
-        make_all_lights_movable()
-    _enabled = True
-    _save_state()
-    _start_watcher()
-    _log("ON - all lights are forced to Movable.")
+    return run_make_movable(ask) if all_maps else make_all_lights_movable()
 
 
 def disable(all_maps=True, ask=True):
-    """Turn OFF: restore the original mobility in every map (or just the open level)."""
-    global _enabled
-    maps = None
-    if all_maps:
-        if not _source_control_ok():
-            return
-        maps = find_all_maps()
-        if ask and not _confirm(
-                "Restore every light's original mobility in all {} map(s)?\n\n{}"
-                .format(len(maps), _mode_text())):
-            return
-    _enabled = False
-    _save_state()
-    _stop_watcher()
-    if all_maps:
-        process_all_maps(False, maps)
-    else:
-        restore_original_mobility()
-    _log("OFF - original light mobility restored.")
-
-
-def toggle():
-    if _enabled:
-        disable()
-    else:
-        enable()
+    return run_restore(ask) if all_maps else restore_original_mobility()
 
 
 # --------------------------------------------------------------------------
-# Menu entries (Tools menu)
+# Menu entries (Tools menu) - plain buttons, no on/off state
 # --------------------------------------------------------------------------
 
 @unreal.uclass()
-class LightMobilityToggleEntry(unreal.ToolMenuEntryScript):
+class LightMobilityMakeMovableEntry(unreal.ToolMenuEntryScript):
 
     @unreal.ufunction(override=True)
     def execute(self, context):
-        toggle()
+        run_make_movable()
+
+
+@unreal.uclass()
+class LightMobilityRestoreEntry(unreal.ToolMenuEntryScript):
 
     @unreal.ufunction(override=True)
-    def get_check_state(self, context):
-        return unreal.CheckBoxState.CHECKED if _enabled else unreal.CheckBoxState.UNCHECKED
+    def execute(self, context):
+        run_restore()
 
 
 @unreal.uclass()
@@ -1205,39 +1154,31 @@ def _register_menu():
         return
 
     menu.add_section(MENU_SECTION, "Lighting")
-
-    toggle_entry = LightMobilityToggleEntry()
-    toggle_entry.init_entry(
-        MENU_OWNER, MENU_NAME, MENU_SECTION,
-        "ForceLightsMovable",
-        "Force Lights Movable (All Maps)",
-        "When checked, every light in every map is set to Movable (no Static/Stationary). "
-        "Changed maps are checked out in Perforce and saved. Uncheck to restore.",
-    )
-    advanced = toggle_entry.data.advanced
-    advanced.user_interface_action_type = unreal.UserInterfaceActionType.TOGGLE_BUTTON
-    toggle_entry.data.advanced = advanced
-    menu.add_menu_entry_object(toggle_entry)
-
-    preview_entry = LightMobilityPreviewEntry()
-    preview_entry.init_entry(
-        MENU_OWNER, MENU_NAME, MENU_SECTION,
-        "PreviewLightMobility",
-        "Light Mobility: Preview (no changes)",
-        "Opens every map and lists which lights would change. Nothing is modified, "
-        "checked out or saved.",
-    )
-    menu.add_menu_entry_object(preview_entry)
+    for cls, name, label, tip in (
+            (LightMobilityMakeMovableEntry, "MakeAllLightsMovable",
+             "Lights: Make All Movable (All Maps)",
+             "Opens every map, sets every light to Movable and saves. Runs once and finishes; "
+             "run again any time to go through every map again."),
+            (LightMobilityRestoreEntry, "RestoreLightMobility",
+             "Lights: Restore Original Mobility (All Maps)",
+             "Puts every light this tool changed back to Static/Stationary, in every map."),
+            (LightMobilityPreviewEntry, "PreviewLightMobility",
+             "Lights: Preview (no changes)",
+             "Opens every map and lists which lights would change. Nothing is modified, "
+             "checked out or saved.")):
+        entry = cls()
+        entry.init_entry(MENU_OWNER, MENU_NAME, MENU_SECTION, name, label, tip)
+        menu.add_menu_entry_object(entry)
 
     menus.refresh_all_widgets()
 
 
 def startup():
-    """Called from init_unreal.py when the editor starts."""
-    global _enabled
+    """Called from init_unreal.py when the editor starts: adds the menu entries.
+    Nothing runs in the background."""
     _register_menu()
-    _enabled = _load_state()
-    if _enabled:
-        # Level may not be loaded yet; the watcher applies it on the first scan.
-        _start_watcher()
-        _log("Restored ON state from last session.")
+    try:
+        if os.path.exists(_OLD_STATE_FILE):
+            os.remove(_OLD_STATE_FILE)   # on/off memory from older versions
+    except OSError:
+        pass

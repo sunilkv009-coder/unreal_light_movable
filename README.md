@@ -8,18 +8,26 @@ This repository has two tools:
 
 ---
 
-Adds a checkbox to the editor: **Tools → Force Lights Movable (All Maps)**.
+Adds three commands to the **Tools** menu:
 
-- **On:** after you confirm, the tool opens **every map in the project** (everything under `/Game`) one at a time.
+- **Lights: Make All Movable (All Maps)**
+- **Lights: Restore Original Mobility (All Maps)**
+- **Lights: Preview (no changes)**
+
+Each command runs once and finishes. Nothing keeps running in the background, and nothing is remembered between runs or editor restarts.
+Running a command again goes through every map again.
+
+- **Make All Movable:** after you confirm, the tool opens **every map in the project** (everything under `/Game`) one at a time.
   In each map it sets every light to **Movable**, so none are Static or Stationary, then saves the map.
   This covers Point, Spot, Rect, Directional and Sky lights, and also light components inside Blueprint actors.
   - Each light's original mobility is saved as a component tag (`LightMobilityTool.Original=Static`, for example).
   - **World Partition** maps are handled too. The tool loads their actors in batches of 500, so unloaded cells aren't skipped.
   - A progress bar with a **Cancel** button shows while it runs. When it finishes, it reopens the map you started on.
-  - While the checkbox stays on, the open map is rescanned every 2 seconds, so lights you add later also become Movable.
-- **Off:** opens every map again, sets each light back to its original mobility, removes the tag and saves the map.
-- Before switching maps, the tool asks whether to save any unsaved work.
-- The on/off state is saved in `Saved/LightMobilityTool.json` and persists across editor restarts.
+  - The report lists lights changed, lights that were already Movable, and anything skipped with the reason.
+  - Lights you add later aren't changed automatically. Run the command again.
+- **Restore Original Mobility:** opens every map again, sets each light back to its original mobility, removes the tag and saves the map.
+- **Unsaved work is protected.** Opening another map makes Unreal throw away unsaved changes without asking, so the tool asks you to save first.
+  If anything is still unsaved after that, for example a light you just placed, **the run doesn't start** and nothing is changed.
 - The tool doesn't change anything while Play-In-Editor is running.
 
 ## Production safety: nothing moves
@@ -76,7 +84,7 @@ To make Perforce mandatory, set `REQUIRE_SOURCE_CONTROL = True`.
 - **No forced saves:** files that can't be checked out are never saved, and read-only files are never overwritten.
 - **No submits:** nothing is submitted. Changes go to your default changelist, so you can review and submit them in P4V.
 - **Report:** every run, in either mode, writes a report to `Saved/Logs/LightMobilityTool_<date>.txt` listing every change and skip.
-- **Preview:** **Tools → Light Mobility: Preview (no changes)** shows what would change without touching any file.
+- **Preview:** **Tools → Lights: Preview (no changes)** shows what would change without touching any file.
 
 ## Install
 
@@ -86,8 +94,8 @@ Short version:
 1. Copy the `LightMobilityTool` folder to `YourProject/Plugins/LightMobilityTool/`.
 2. Restart the editor and accept enabling the plugin.
 3. On a Perforce project, connect to Perforce in the editor. On a normal project, back up first.
-   Then run **Tools → Light Mobility: Preview (no changes)**.
-4. Then run **Tools → Force Lights Movable (All Maps)**.
+   Then run **Tools → Lights: Preview (no changes)**.
+4. Then run **Tools → Lights: Make All Movable (All Maps)**.
 
 ## Use from Python or the console
 
@@ -95,16 +103,15 @@ In the Output Log, switch the input from `Cmd` to `Python`:
 
 ```python
 import light_mobility_tool as lmt
-lmt.enable()                      # all maps: force lights Movable (asks first)
-lmt.disable()                     # all maps: restore originals
-lmt.enable(all_maps=False)        # only the open level
-lmt.process_all_maps(make_movable=True)   # one-shot over all maps, no toggle
+lmt.run_make_movable()            # all maps: make lights Movable (asks first)
+lmt.run_restore()                 # all maps: restore originals
+lmt.preview_all_maps()            # all maps: report only
 lmt.find_all_maps()               # list the maps it will touch
-lmt.make_all_lights_movable()     # one-shot, open level only
+lmt.make_all_lights_movable()     # open level only (not saved for you)
 ```
 
 From a Blueprint (an Editor Utility Widget button, for example), use the **Execute Python Command** node with
-`import light_mobility_tool as lmt; lmt.toggle()`.
+`import light_mobility_tool as lmt; lmt.run_make_movable()`.
 
 ## Settings
 
@@ -113,7 +120,6 @@ These are at the top of `Content/Python/light_mobility_tool.py`:
 - `MAP_ROOTS = ["/Game"]`: the folders searched for maps. Add `"/YourPlugin"` to include maps inside plugins,
   or narrow it to something like `["/Game/Maps"]`.
 - `WP_ACTOR_BATCH_SIZE = 500`: how many World Partition actors are loaded at once. Lower it if memory runs out.
-- `RESCAN_INTERVAL = 2.0`: how often, in seconds, the open map is rescanned while the tool is on.
 
 ## Pure-Blueprint alternative (no Python)
 
@@ -127,14 +133,14 @@ If you'd rather build it as an Editor Utility Blueprint:
    - **If unchecked:** if the component has `Orig_Static` or `Orig_Stationary` in its tags, call **Set Mobility** with that value and remove the tag.
 4. Right-click the widget and choose **Run Editor Utility Widget**.
 
-That only covers the open level. The Python plugin also goes through every map and handles World Partition, the auto-rescan and the saved state.
+That only covers the open level. The Python plugin also goes through every map, handles World Partition and Perforce, and checks that nothing moves.
 
 ## Notes
 
 - Movable lights skip baked lighting entirely, so they cost more at runtime. If your project uses Lumen,
   lighting is effectively dynamic already and this mostly removes the "lighting needs rebuild" workflow.
 - Lights created by a Blueprint **Construction Script** get rebuilt when that script reruns, so they go back
-  to whatever the script sets. The rescan switches them back to Movable on its next pass.
+  to whatever the script sets. To make them Movable for good, set Mobility inside the Blueprint itself.
 - The tool saves maps automatically. If you use source control (Perforce or Git LFS locking), check out the maps first,
   or the saves will fail; any failures show up in the Output Log.
 - On a large project, going through every map can take a while. Commit or back up first, and test on a copy before running it.

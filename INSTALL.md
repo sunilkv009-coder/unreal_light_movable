@@ -78,8 +78,9 @@ Skip this step if you don't use Perforce, or only you need the tool.
 ## 5. Check that it loaded
 
 1. Open the **Tools** menu at the top of the editor. There should be a **Lighting** section with:
-   - **Force Lights Movable (All Maps)**, a checkbox
-   - **Light Mobility: Preview (no changes)**
+   - **Lights: Make All Movable (All Maps)**
+   - **Lights: Restore Original Mobility (All Maps)**
+   - **Lights: Preview (no changes)**
 2. Open **Window → Output Log** and type `LightMobilityTool` in its search box. There should be no red errors.
 
 If the menu items are missing, see [Troubleshooting](#troubleshooting) below.
@@ -103,10 +104,11 @@ any work done either.
 1. **(Perforce)** **Get Latest** in P4V, so every map is at the latest revision. The tool skips maps that are out of date.
    **(No source control)** Back up your project folder.
 2. **(Perforce)** Ask your team to check in, or at least release, any maps they have checked out. The tool skips maps someone else has locked.
-3. Run **Tools → Light Mobility: Preview (no changes)**.
+3. **Save everything** (File → Save All). The tool won't start while anything is unsaved, because opening other maps would throw unsaved work away.
+   Then run **Tools → Lights: Preview (no changes)**.
    - It opens every map and lists the lights it would change. It doesn't modify, check out or save anything.
    - When it finishes, it shows a summary and the path of a full report (`Saved/Logs/LightMobilityTool_<date>.txt`).
-4. Read the report. If it looks right, click **Tools → Force Lights Movable (All Maps)**.
+4. Read the report. If it looks right, click **Tools → Lights: Make All Movable (All Maps)**.
    The confirm dialog says which mode it will use, **source control** or **LOCAL MODE**. Check that's the mode you expect, then click **Yes**.
 5. When it finishes, read the summary and the report. It lists every map and light that was skipped, and why.
    - Check the **ERRORS** section. A "SAFETY CHECK" entry means a light's change caused something else to change
@@ -119,7 +121,7 @@ any work done either.
    - Open a couple of maps in the editor and check the lighting.
    - Then **Submit**. The tool never submits for you.
 
-To undo everything, untick **Force Lights Movable (All Maps)**. It goes through every map again, puts each light back to its original Static or Stationary setting, checks out the files and saves them, ready for you to submit.
+To undo everything, run **Tools → Lights: Restore Original Mobility (All Maps)**. It goes through every map again, puts each light back to its original Static or Stationary setting, checks out the files and saves them, ready for you to submit.
 If you haven't submitted yet, you can also just **Revert** the changelist in P4V. Without source control, you can restore your backup.
 
 ## 8. What the tool will never do
@@ -150,7 +152,6 @@ These are at the top of `Plugins/LightMobilityTool/Content/Python/light_mobility
 | `POSITION_TOLERANCE` / `ROTATION_TOLERANCE` / `SCALE_TOLERANCE` | `0.001` cm / `0.001`° / `0.00001` | How much movement counts as "moved" in the safety check. |
 | `LIGHT_PROPERTIES_TO_VERIFY` | (list) | Light settings verified to be unchanged. |
 | `WP_ACTOR_BATCH_SIZE` | `500` | How many World Partition actors are loaded at once. Lower it if you run out of memory. |
-| `RESCAN_INTERVAL` | `2.0` | How often, in seconds, the open map is rescanned while the tool is on. |
 
 After editing the file, restart the editor.
 
@@ -259,7 +260,7 @@ In the Output Log, switch `Cmd` to `Python`:
 ```python
 import light_mobility_tool as lmt
 lmt.preview_all_maps()
-lmt.enable()
-lmt.disable()
-lmt.enable(all_maps=False)   # open level only
+lmt.run_make_movable()
+lmt.run_restore()
+lmt.make_all_lights_movable()   # open level only
 ```
