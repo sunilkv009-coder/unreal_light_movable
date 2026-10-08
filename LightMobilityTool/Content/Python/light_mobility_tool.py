@@ -444,16 +444,19 @@ def _check_editable(pkg_name, check_out):
 class _EditGuard(object):
     """Caches per-package checkout results for one pass over a level."""
 
-    def __init__(self, report, map_package=None, cache=None):
+    def __init__(self, report, map_package=None, cache=None, check_files=True):
         self.report = report
         self.map_package = map_package
         self.cache = cache if cache is not None else {}
+        self.check_files = check_files
 
     def allow(self, comp):
         owner = comp.get_owner() or comp
         pkg = _package_name(owner)
         if self.map_package and not _belongs_to_map(pkg, self.map_package):
             return False   # belongs to another map; handled when that map is processed
+        if not self.check_files:
+            return True    # open-level mode: nothing is saved, Unreal handles checkout on save
         if pkg not in self.cache:
             self.cache[pkg] = _check_editable(pkg, check_out=True)
         ok, reason = self.cache[pkg]
@@ -783,10 +786,10 @@ def _apply(changes, title, report):
     return 0
 
 
-def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=None):
+def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=None, check_files=True):
     """Set every non-movable light to Movable, remembering its original mobility.
     Only Mobility (and a tag) changes; this is verified after every batch."""
-    guard = _EditGuard(report, map_package, _cache)
+    guard = _EditGuard(report, map_package, _cache, check_files)
     comps = list(_light_components(actors))
     if report is not None:
         for c in comps:
@@ -829,9 +832,9 @@ def make_all_lights_movable(actors=None, report=None, map_package=None, _cache=N
     return n
 
 
-def restore_original_mobility(actors=None, report=None, map_package=None):
+def restore_original_mobility(actors=None, report=None, map_package=None, check_files=True):
     """Put back the mobility of every light this tool changed."""
-    guard = _EditGuard(report, map_package)
+    guard = _EditGuard(report, map_package, check_files=check_files)
     todo = [(c, _get_saved_mobility(c)) for c in _light_components(actors)]
     todo = [(c, m) for c, m in todo if m is not None and guard.allow(c)]
     changes = []
@@ -1239,6 +1242,40 @@ def run_restore(ask=True):
     return process_all_maps(False, maps)
 
 
+def run_open_level(make_movable=True, show_report=True):
+    """Change every loaded light in the OPEN level (persistent + loaded sublevels).
+    No Perforce or revision checks and nothing is saved: you review, then save
+    (Unreal asks for checkout as usual) or press Ctrl+Z / close without saving."""
+    title = "Light Mobility Tool - Open Level - {}".format("Make Movable" if make_movable else "Restore")
+    report = _Report(title)
+    if _level_editor().is_in_play_in_editor():
+        report.error("Stop Play-In-Editor first.")
+        if show_report:
+            report.show()
+        return report
+    world = _editor_world()
+    level = world.get_outermost().get_name() if world else "?"
+    report.line("Open level: {} (+ loaded sublevels: {})".format(
+        level, ", ".join(p for p in _loaded_level_packages() if p != level) or "none"))
+    lights = list(_light_components())
+    report.line("{} light(s) loaded ({} Movable, {} Stationary, {} Static)".format(
+        len(lights),
+        sum(1 for c in lights if c.get_editor_property("mobility") == unreal.ComponentMobility.MOVABLE),
+        sum(1 for c in lights if c.get_editor_property("mobility") == unreal.ComponentMobility.STATIONARY),
+        sum(1 for c in lights if c.get_editor_property("mobility") == unreal.ComponentMobility.STATIC)))
+    _blocked.clear()
+    if make_movable:
+        report.lights_changed = make_all_lights_movable(report=report, check_files=False)
+    else:
+        report.lights_changed = restore_original_mobility(report=report, check_files=False)
+    report.maps_done = 1
+    report.line("NOT SAVED. Check the lights, then File > Save All to keep (Unreal asks Perforce "
+                "for checkout as usual), or Ctrl+Z to undo.")
+    if show_report:
+        report.show()
+    return report
+
+
 # Old names, kept so existing scripts keep working. They no longer turn anything
 # "on" - they just run once.
 def enable(all_maps=True, ask=True):
@@ -1270,6 +1307,22 @@ class LightMobilityRestoreEntry(unreal.ToolMenuEntryScript):
 
 
 @unreal.uclass()
+class LightMobilityOpenLevelEntry(unreal.ToolMenuEntryScript):
+
+    @unreal.ufunction(override=True)
+    def execute(self, context):
+        run_open_level(True)
+
+
+@unreal.uclass()
+class LightMobilityOpenLevelRestoreEntry(unreal.ToolMenuEntryScript):
+
+    @unreal.ufunction(override=True)
+    def execute(self, context):
+        run_open_level(False)
+
+
+@unreal.uclass()
 class LightMobilityPreviewEntry(unreal.ToolMenuEntryScript):
 
     @unreal.ufunction(override=True)
@@ -1286,6 +1339,13 @@ def _register_menu():
 
     menu.add_section(MENU_SECTION, "Lighting")
     for cls, name, label, tip in (
+            (LightMobilityOpenLevelEntry, "MakeOpenLevelLightsMovable",
+             "Lights: Make Movable in Open Level (no save)",
+             "Changes every loaded light in the open level and its loaded sublevels. No Perforce "
+             "checks, nothing saved - you decide whether to save (Ctrl+Z undoes)."),
+            (LightMobilityOpenLevelRestoreEntry, "RestoreOpenLevelLights",
+             "Lights: Restore Open Level (no save)",
+             "Puts the lights in the open level back to their original mobility. Nothing saved."),
             (LightMobilityMakeMovableEntry, "MakeAllLightsMovable",
              "Lights: Make All Movable (All Maps)",
              "Opens every map, sets every light to Movable and saves. Runs once and finishes; "

@@ -8,8 +8,12 @@ This repository has two tools:
 
 ---
 
-Adds three commands to the **Tools** menu:
+Adds these commands to the **Tools** menu:
 
+- **Lights: Make Movable in Open Level (no save)**: changes every light in the open level and its loaded sublevels.
+  It does no Perforce or revision checks and **saves nothing**. You review the result, then save (Unreal asks for checkout as usual)
+  or press Ctrl+Z. Use this when maps are out of date or you want to decide about saving yourself.
+- **Lights: Restore Open Level (no save)**
 - **Lights: Make All Movable (All Maps)**
 - **Lights: Restore Original Mobility (All Maps)**
 - **Lights: Preview (no changes)**

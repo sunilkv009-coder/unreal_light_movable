@@ -277,5 +277,20 @@ text = r.text()
 assert "NOT changed (map skipped): MainFill" in text and "+ sublevel /RoDContent/S_Placeholder" in text
 assert "2 light(s) in this map (0 Movable, 0 Stationary, 2 Static)" in text
 print("sublevel discovery OK")
+
+# ---- Open-level mode: ignores revision/Perforce, saves nothing ----
+lmt._blocked.clear(); S.saved = []; S.checkouts = []
+for a in (sun, spot, main_light):
+    a.comps[0].props["mobility"] = M.STATIC; a.comps[0].props["component_tags"] = []
+S.files[ph] = U.FState(is_current=False)
+U.LevelEditorSubsystem().load_level(main)
+U.DIRTY.clear()
+r = lmt.run_open_level(True, show_report=False)
+assert all(a.comps[0].props["mobility"] == M.MOVABLE for a in (sun, spot, main_light)), r.lights_skipped
+assert not S.saved and not S.checkouts, "open-level mode must not save or check out"
+assert r.lights_changed == 3 and "NOT SAVED" in r.text()
+r = lmt.run_open_level(False, show_report=False)
+assert sun.comps[0].props["mobility"] == M.STATIC and main_light.comps[0].props["mobility"] == M.STATIC
+print("open level OK")
 print(text.split("DETAILS")[1])
 print("ALL TESTS PASSED")
