@@ -1,10 +1,12 @@
-# Light Mobility Tool + Performance Improvements (Unreal Engine 5 editor plugins)
+# Light Mobility Tool + Performance Improvements + Camera Match (Unreal Engine 5 editor plugins)
 
-This repository has two tools:
+This repository has three tools:
 
 - **Light Mobility Tool:** makes every light in every map Movable, safely. It's described below.
 - **Performance Improvements tab:** scans the project and level, gives per-setting toggles with suggestions,
   and runs an Auto Optimize with before/after FPS. Textures are never touched. See **[PERFORMANCE.md](PERFORMANCE.md)**.
+- **Camera Match (from Photo) tab:** fSpy inside Unreal. Drag lines onto edges in a backplate photo, and it creates a Cine Camera
+  with the matching focal length, position and rotation, with the photo shown through it. See **[CAMERA_MATCH.md](CAMERA_MATCH.md)**.
 
 ---
 
@@ -162,6 +164,9 @@ That only covers the open level. The Python plugin also goes through every map, 
 - Save to Project restoring `DefaultEngine.ini` byte for byte;
 - read-only config files;
 - the level toggle's safety check.
+
+`python3 tests/test_camera_match.py` builds and runs the Camera Match solver tests (needs g++ or clang++). They check that
+cameras are recovered exactly from synthetic photos, for both methods and all scale options, plus the error cases.
 
 `python3 tests/test_tool.py` runs the tool's logic against a fake `unreal` module. It covers:
 - preview mode, and refusing to run when disconnected from Perforce

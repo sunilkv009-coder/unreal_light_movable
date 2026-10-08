@@ -231,6 +231,22 @@ The full list of settings and how each one is protected is in **[PERFORMANCE.md]
 - **"The level viewport is not in Realtime mode"**: click in the viewport and press **Ctrl+R**.
 - **The numbers jump around**: close other heavy apps, keep the editor focused, don't move the camera, and run again.
 
+## 11. Camera Match (from Photo) tab
+
+An fSpy-style camera matcher: it creates a Cine Camera that matches a backplate photo. It's a separate C++ plugin (`CameraMatch`)
+and doesn't need the Light Mobility Tool or Python.
+
+1. Install Visual Studio as in [10-easy](#10-easy-one-double-click-recommended), step 1.
+2. Close Unreal.
+3. Double-click **`Build-CameraMatch.bat`** (or drag your `.uproject` onto it) and pick your project.
+   It compiles the plugin and copies it to `YourProject/Plugins/CameraMatch/`.
+4. Open the project and go to **Tools → Camera Match (from Photo)...**
+5. **(Perforce)** Submit `Plugins/CameraMatch/` (with `Binaries/`, without `Intermediate/`). Assets the tool creates go to
+   `/Game/CameraMatch`; Unreal marks them for add when you save them.
+
+To build it by hand, use the same steps as 10a/10b with `CameraMatch` in place of `PerformanceOptimizerUI`.
+How to use it: **[CAMERA_MATCH.md](CAMERA_MATCH.md)**.
+
 ## Troubleshooting
 
 **No menu items under Tools**

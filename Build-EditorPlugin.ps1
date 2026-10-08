@@ -1,27 +1,36 @@
 <#
-  Builds the PerformanceOptimizerUI editor plugin (the "Performance Improvements" tab)
-  and installs it into your Unreal project. Works for Blueprint-only and C++ projects.
+  Builds one of the C++ editor plugins in this repository and installs it into your
+  Unreal project. Works for Blueprint-only and C++ projects.
 
-  Easiest: double-click Build-PerformanceOptimizerUI.bat (or drag your .uproject onto it).
+    -PluginName PerformanceOptimizerUI   the "Performance Improvements" tab (default)
+    -PluginName CameraMatch              the "Camera Match (from Photo)" tab
+
+  Easiest: double-click Build-PerformanceOptimizerUI.bat or Build-CameraMatch.bat
+  (or drag your .uproject onto it).
 
   What it does:
     1. Finds your .uproject and the engine it uses.
     2. Checks that Visual Studio with C++ is installed.
     3. Compiles the plugin with Unreal's own RunUAT BuildPlugin (in a temp folder).
-    4. Copies the result to <Project>\Plugins\PerformanceOptimizerUI
-       (and LightMobilityTool if it's missing or out of date - asks first).
+    4. Copies the result to <Project>\Plugins\<PluginName>
+       (for the Performance tab, also LightMobilityTool if it's missing or out of date - asks first).
 
   It never submits anything, never changes read-only (Perforce) files, and never
   touches your maps or assets.
 #>
 param(
-    [string]$Project
+    [string]$Project,
+    [ValidateSet('PerformanceOptimizerUI', 'CameraMatch')]
+    [string]$PluginName = 'PerformanceOptimizerUI'
 )
 
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PluginName = 'PerformanceOptimizerUI'
 $PluginSource = Join-Path $Here $PluginName
+$PluginInfo = @{
+    PerformanceOptimizerUI = @{ Title = 'Performance Improvements tab'; Menu = 'Tools -> Performance Improvements...'; NeedsLightTool = $true }
+    CameraMatch            = @{ Title = 'Camera Match (from Photo) tab'; Menu = 'Tools -> Camera Match (from Photo)...'; NeedsLightTool = $false }
+}[$PluginName]
 $ToolSource = Join-Path $Here 'LightMobilityTool'
 
 function Write-Step([string]$Text) { Write-Host ''; Write-Host "==> $Text" -ForegroundColor Cyan }
@@ -104,7 +113,7 @@ function Test-FoldersDiffer([string]$A, [string]$B) {
 }
 
 # ---------------------------------------------------------------------------
-Write-Host 'Performance Improvements tab - build and install' -ForegroundColor White
+Write-Host "$($PluginInfo.Title) - build and install" -ForegroundColor White
 
 if (-not (Test-Path (Join-Path $PluginSource "$PluginName.uplugin"))) {
     Stop-WithError "Can't find $PluginName\$PluginName.uplugin next to this script. Run it from the downloaded repository folder."
@@ -114,7 +123,7 @@ if (-not (Test-Path (Join-Path $PluginSource "$PluginName.uplugin"))) {
 Write-Step 'Finding your project'
 if (-not $Project) { $Project = Select-UProject }
 if (-not $Project -or -not (Test-Path $Project) -or ([IO.Path]::GetExtension($Project) -ne '.uproject')) {
-    Stop-WithError 'No .uproject selected. Drag your .uproject onto Build-PerformanceOptimizerUI.bat, or pick it in the dialog.'
+    Stop-WithError "No .uproject selected. Drag your .uproject onto Build-$PluginName.bat, or pick it in the dialog."
 }
 $Project = (Resolve-Path $Project).Path
 $ProjectDir = Split-Path -Parent $Project
@@ -168,7 +177,7 @@ Write-Step 'Compiling the plugin (this takes a few minutes)'
 $base = $env:TEMP
 if (-not $base -or $base.Contains(' ')) { $base = Join-Path $env:SystemDrive 'Temp' }
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$work = Join-Path $base "PerfUIBuild_$stamp"
+$work = Join-Path $base "${PluginName}Build_$stamp"
 $stagedSource = Join-Path $work "Source\$PluginName"
 $built = Join-Path $work "Built\$PluginName"
 $log = Join-Path $work 'build.log'
@@ -183,7 +192,7 @@ $ErrorActionPreference = 'Continue'
 $buildCode = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 
-$dll = Get-ChildItem -Path (Join-Path $built 'Binaries') -Recurse -Filter '*PerformanceOptimizerUI*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+$dll = Get-ChildItem -Path (Join-Path $built 'Binaries') -Recurse -Filter "*$PluginName*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($buildCode -ne 0 -or -not $dll) {
     Write-Host ''
     Write-Host 'Build FAILED. Lines with errors:' -ForegroundColor Red
@@ -206,9 +215,9 @@ New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Folder $built $dest @('Intermediate')
 Write-Ok "Installed: $dest"
 
-# LightMobilityTool holds the Python logic the tab uses.
+# LightMobilityTool holds the Python logic the Performance tab uses.
 $toolDest = Join-Path $pluginsDir 'LightMobilityTool'
-if (Test-Path $ToolSource) {
+if ($PluginInfo.NeedsLightTool -and (Test-Path $ToolSource)) {
     if (-not (Test-Path $toolDest)) {
         Copy-Folder $ToolSource $toolDest @('__pycache__')
         Write-Ok "Installed: $toolDest (the tab's Python logic)"
@@ -238,8 +247,10 @@ Write-Host ''
 Write-Host 'DONE.' -ForegroundColor Green
 Write-Host 'Next:'
 Write-Host '  1. Open your project. If Unreal asks to enable the new plugin, click Yes.'
-Write-Host '  2. Tools -> Performance Improvements...'
-Write-Host '  3. Perforce: submit Plugins\PerformanceOptimizerUI (with Binaries, without Intermediate)'
-Write-Host '     and Plugins\LightMobilityTool if it was added or updated.'
+Write-Host "  2. $($PluginInfo.Menu)"
+Write-Host "  3. Perforce: submit Plugins\$PluginName (with Binaries, without Intermediate)"
+if ($PluginInfo.NeedsLightTool) {
+    Write-Host '     and Plugins\LightMobilityTool if it was added or updated.'
+}
 Write-Host '  Note: the compiled plugin only works with this engine version; run this again after an engine upgrade.'
 exit 0
