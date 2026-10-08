@@ -246,4 +246,36 @@ assert len(U.TICKS) == ticks_before, "startup must not start anything in the bac
 assert not os.path.exists(old_state), "old on/off memory must be removed"
 assert not hasattr(lmt, "toggle") and not hasattr(lmt, "is_enabled")
 print("no memory OK")
+
+# ---- The user's project: lights in sublevels outside /Game, main map out of date ----
+lmt._blocked.clear(); S.saved = []; S.files = {}; S.sc = True; S.checkouts = []
+U.DIALOGS.clear()
+main, ph = "/Game/Maps/RoD_MAIN", "/RoDContent/S_Placeholder"
+sun = U.Actor("DirectionalLight", ph, [])
+sun.comps = [U.DirectionalLightComponent(sun, M.STATIC)]
+U.ArrowComponent(sun, M.STATIC, "ArrowComponent0", parent=sun.comps[0])
+sun.others = list(sun.comps[0].children)
+spot = U.Actor("SpotLight", ph, [M.STATIC])
+main_light = U.Actor("MainFill", main, [M.STATIC])
+S.maps = {
+    "/Game/Maps/CAM_CINECAM": {"actors": []},
+    "/Game/Maps/CAM_ORBIT": {"actors": []},
+    main: {"actors": [main_light, sun, spot], "sublevels": ["/Game/Maps/CAM_CINECAM", ph]},
+    ph: {"actors": [sun, spot]},
+}
+S.files[main] = U.FState(is_current=False)
+assert lmt.find_all_maps() == ["/Game/Maps/CAM_CINECAM", "/Game/Maps/CAM_ORBIT", main]
+warning = lmt._skip_warning(lmt.find_all_maps())
+assert "will be SKIPPED" in warning and main in warning, warning
+r = lmt.process_all_maps(True, maps=lmt.find_all_maps(), show_report=False)
+assert sun.comps[0].props["mobility"] == M.MOVABLE, "directional light in the sublevel must change"
+assert spot.comps[0].props["mobility"] == M.MOVABLE, "spot light in the sublevel must change"
+assert main_light.comps[0].props["mobility"] == M.STATIC, "out-of-date map must not be edited"
+assert ph in S.saved and main not in S.saved
+assert [m for m, _ in r.maps_skipped] == [main] and r.lights_not_changed == 1
+text = r.text()
+assert "NOT changed (map skipped): MainFill" in text and "+ sublevel /RoDContent/S_Placeholder" in text
+assert "2 light(s) in this map (0 Movable, 0 Stationary, 2 Static)" in text
+print("sublevel discovery OK")
+print(text.split("DETAILS")[1])
 print("ALL TESTS PASSED")

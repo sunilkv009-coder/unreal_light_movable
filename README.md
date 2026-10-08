@@ -23,7 +23,10 @@ Running a command again goes through every map again.
   - Each light's original mobility is saved as a component tag (`LightMobilityTool.Original=Static`, for example).
   - **World Partition** maps are handled too. The tool loads their actors in batches of 500, so unloaded cells aren't skipped.
   - A progress bar with a **Cancel** button shows while it runs. When it finishes, it reopens the map you started on.
-  - The report lists lights changed, lights that were already Movable, and anything skipped with the reason.
+  - **Sublevels are included wherever they're stored**, even outside `/Game`. The tool finds them from the maps that use them.
+  - **Before it starts**, the tool warns you about maps it will have to skip (out of date or locked in Perforce), so you can Get Latest first.
+  - **The report** lists every map with how many lights it has (Movable / Stationary / Static), each light it changed,
+    the lights it could **not** change because their map was skipped, and anything else skipped with the reason.
   - Lights you add later aren't changed automatically. Run the command again.
 - **Restore Original Mobility:** opens every map again, sets each light back to its original mobility, removes the tag and saves the map.
 - **Unsaved work is protected.** Opening another map makes Unreal throw away unsaved changes without asking, so the tool asks you to save first.

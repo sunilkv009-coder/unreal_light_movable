@@ -160,13 +160,25 @@ class EditorLoadingAndSavingUtils:
 class TopLevelAssetPath:
     def __init__(s, a, b): pass
 class ARFilter:
-    def __init__(s, **kw): pass
+    def __init__(s, **kw): s.package_paths = kw.get("package_paths", ["/"])
+class AssetRegistryDependencyOptions: pass
+class EditorLevelUtils:
+    @staticmethod
+    def get_levels(world):
+        p = world._pkg
+        return [Obj(x) for x in [p] + STATE.maps.get(p, {}).get("sublevels", [])]
 class AssetRegistryHelpers:
     @staticmethod
     def get_asset_registry():
         class R:
             def wait_for_completion(s): pass
-            def get_assets(s, f): return [types.SimpleNamespace(package_name=m) for m in STATE.maps]
+            def get_assets(s, f):
+                return [types.SimpleNamespace(package_name=m) for m in STATE.maps
+                        if any(m.startswith(r.rstrip("/") + "/") for r in f.package_paths)]
+            def get_dependencies(s, pkg, opts): return list(STATE.maps.get(pkg, {}).get("sublevels", []))
+            def get_assets_by_package_name(s, pkg):
+                if pkg not in STATE.maps: return []
+                return [types.SimpleNamespace(asset_class_path=types.SimpleNamespace(asset_name="World"))]
         return R()
 class WorldPartitionBlueprintLibrary:
     @staticmethod

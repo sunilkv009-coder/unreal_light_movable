@@ -141,6 +141,7 @@ class _Report(object):
         self.lines = []
         self.lights_changed = 0
         self.already_movable = set()  # lights that were Movable already
+        self.lights_not_changed = 0     # lights in skipped maps
         self.maps_done = 0
         self.maps_skipped = []      # (map, reason)
         self.lights_skipped = []    # (light, reason)
@@ -178,7 +179,8 @@ class _Report(object):
         out.append("Maps processed:   {}".format(self.maps_done))
         out.append("Lights changed:   {}".format(self.lights_changed))
         out.append("Already Movable:  {}".format(len(self.already_movable)))
-        out.append("Maps skipped:     {}".format(len(self.maps_skipped)))
+        out.append("Maps skipped:     {}  ({} light(s) in them NOT changed)".format(
+            len(self.maps_skipped), self.lights_not_changed))
         out.append("Lights skipped:   {}".format(len(self.lights_skipped)))
         out.append("Files not saved:  {}".format(len(self.files_not_saved)))
         out.append("Errors:           {}".format(len(self.errors)))
@@ -222,8 +224,9 @@ class _Report(object):
     def show(self):
         path = self.write()
         summary = ("Maps processed: {}\nLights changed: {}\nAlready Movable: {}\n\n"
-                   "Maps skipped: {}\nLights skipped: {}\nFiles NOT saved: {}\nErrors: {}\n"
+                   "Maps skipped: {} ({} light(s) in them NOT changed)\nLights skipped: {}\nFiles NOT saved: {}\nErrors: {}\n"
                    .format(self.maps_done, self.lights_changed, len(self.already_movable), len(self.maps_skipped),
+                           self.lights_not_changed,
                            len(self.lights_skipped), len(self.files_not_saved), len(self.errors)))
         if self.has_problems:
             summary += "\nSome items were skipped - see the report for the reasons.\n"
@@ -882,6 +885,87 @@ def find_all_maps():
     return sorted(m for m in maps if "/__External" not in m and not m.startswith("/Temp/"))
 
 
+def _is_world_package(registry, pkg):
+    try:
+        assets = registry.get_assets_by_package_name(pkg)
+    except Exception:
+        return False
+    for a in assets or []:
+        cls = getattr(a, "asset_class_path", None)
+        name = str(getattr(cls, "asset_name", "")) if cls is not None else str(getattr(a, "asset_class", ""))
+        if name == "World":
+            return True
+    return False
+
+
+def _sublevels_of(map_path):
+    """Maps a map refers to (its streaming sublevels), wherever they are stored -
+    also outside MAP_ROOTS. Uses the asset registry, so the map doesn't need to
+    be open and unloaded sublevels are found too."""
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    try:
+        deps = registry.get_dependencies(map_path, unreal.AssetRegistryDependencyOptions())
+    except Exception:
+        return []
+    out = []
+    for dep in deps or []:
+        dep = str(dep)
+        if dep == map_path or not _is_processable_map_path(dep):
+            continue
+        if _is_world_package(registry, dep):
+            out.append(dep)
+    return out
+
+
+def _loaded_level_packages():
+    """Packages of every level currently loaded in the editor (persistent + sublevels)."""
+    world = _editor_world()
+    if world is None:
+        return []
+    try:
+        levels = unreal.EditorLevelUtils.get_levels(world)
+    except Exception:
+        return []
+    out = []
+    for level in levels or []:
+        try:
+            out.append(level.get_outermost().get_name())
+        except Exception:
+            pass
+    return out
+
+
+def _is_processable_map_path(pkg):
+    return (pkg.startswith("/") and "/__External" not in pkg
+            and not pkg.startswith(("/Temp/", "/Engine/", "/Script/", "/Memory/")))
+
+
+def _light_inventory(map_path):
+    """Lights loaded right now, split by the map that owns them."""
+    own, others = [], {}
+    for comp in _light_components():
+        owner = comp.get_owner() or comp
+        pkg = _package_name(owner)
+        if _belongs_to_map(pkg, map_path):
+            own.append(comp)
+        else:
+            if "/__ExternalActors__/" in pkg:
+                mount, rest = pkg.split("/__ExternalActors__/", 1)
+                pkg = mount + "/" + rest   # close enough to name the owning map
+            others[pkg] = others.get(pkg, 0) + 1
+    return own, others
+
+
+def maps_that_will_be_skipped(maps):
+    """(map, reason) for maps that source control will block - shown before a run."""
+    out = []
+    for m in maps:
+        ok, reason = _check_editable(m, check_out=False)
+        if not ok:
+            out.append((m, reason))
+    return out
+
+
 def _world_partition_actor_guids():
     """Guids of every actor in the open World Partition map ([] if it isn't one)."""
     lib = getattr(unreal, "WorldPartitionBlueprintLibrary", None)
@@ -920,6 +1004,15 @@ def _process_open_map(map_path, make_movable, report, dry_run):
         report.touched.clear()
         report.blocked_packages.clear()
         return n
+
+    own, others = _light_inventory(map_path)
+    report.line("  {} light(s) in this map ({} Movable, {} Stationary, {} Static){}".format(
+        len(own),
+        sum(1 for c in own if c.get_editor_property("mobility") == unreal.ComponentMobility.MOVABLE),
+        sum(1 for c in own if c.get_editor_property("mobility") == unreal.ComponentMobility.STATIONARY),
+        sum(1 for c in own if c.get_editor_property("mobility") == unreal.ComponentMobility.STATIC),
+        "" if not others else "; lights from other levels (handled with their own map): " +
+        ", ".join("{} ({})".format(k, v) for k, v in sorted(others.items()))))
 
     count = one_pass()
 
@@ -990,32 +1083,55 @@ def process_all_maps(make_movable=True, maps=None, dry_run=False, show_report=Tr
 
     world = _editor_world()
     start_map = world.get_outermost().get_name() if world else None
-    maps = maps if maps is not None else find_all_maps()
+    maps = list(maps if maps is not None else find_all_maps())
     report.line("Maps found: {}".format(len(maps)))
+
+    # Sublevels can live outside MAP_ROOTS; they're added to the queue as found.
+    queue = list(maps)
+    queued = set(queue)
+
+    def discover(found, parent):
+        for sub in found:
+            if sub not in queued and _is_processable_map_path(sub):
+                queued.add(sub)
+                queue.append(sub)
+                report.line("  + sublevel {} (used by {}) added".format(sub, parent))
 
     _batch_running = True
     try:
         verb = "Previewing" if dry_run else ("Making lights Movable" if make_movable else "Restoring lights")
         with unreal.ScopedSlowTask(len(maps), verb + " in all maps...") as task:
             task.make_dialog(True)
-            for map_path in maps:
+            i = 0
+            while i < len(queue):
+                map_path = queue[i]
+                i += 1
                 if task.should_cancel():
                     report.error("Cancelled by user after {} map(s).".format(report.maps_done))
                     break
                 task.enter_progress_frame(1, "{}: {}".format(verb, map_path))
+                report.line(map_path)
+                discover(_sublevels_of(map_path), map_path)
 
-                # Check the map file before opening it. Out of date / locked
-                # maps are skipped completely.
                 ok, reason = _check_editable(map_path, check_out=False)
-                if not ok:
-                    report.skip_map(map_path, reason)
-                    continue
-
                 try:
                     if not level_editor.load_level(map_path):
                         report.skip_map(map_path, "could not be opened")
                         continue
-                    report.line(map_path)
+                    discover(_loaded_level_packages(), map_path)
+                    if not ok:
+                        # Out of date / locked: nothing is changed, but say which lights that affects.
+                        report.skip_map(map_path, reason)
+                        report.line("  SKIPPED: " + reason)
+                        own, _ = _light_inventory(map_path)
+                        pending = [c for c in own if make_movable and
+                                   c.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE]
+                        for c in pending:
+                            report.line("  NOT changed (map skipped): {} ({})".format(
+                                _light_label(c), _mobility_name(c.get_editor_property("mobility"))))
+                        if pending:
+                            report.lights_not_changed += len(pending)
+                        continue
                     count = _process_open_map(map_path, make_movable, report, dry_run)
                     report.lights_changed += count
                     report.maps_done += 1
@@ -1083,13 +1199,23 @@ def _source_control_ok():
     return True
 
 
+def _skip_warning(maps):
+    blocked = maps_that_will_be_skipped(maps)
+    if not blocked:
+        return ""
+    return ("WARNING - these maps will be SKIPPED, so their lights won't change:\n{}\n"
+            "Get Latest / ask for the files to be released in P4V first, then run.\n\n".format(
+                "\n".join("  {}  ->  {}".format(m, r) for m, r in blocked)))
+
+
 def run_make_movable(ask=True):
     """Make every light in every map Movable, save, done. Nothing keeps running."""
     if not _source_control_ok():
         return None
     maps = find_all_maps()
     if ask and not _confirm(
-            "Set every light to Movable in all {} map(s) under {}?\n\n{}\n"
+            _skip_warning(maps) +
+            "Set every light to Movable in all {} map(s) under {} (plus their sublevels)?\n\n{}\n"
             "- Save your work first: the run doesn't start while anything is unsaved.\n"
             "- Original mobility is remembered as a tag on each light, so "
             "'Restore Original Mobility' can put it back.\n"
@@ -1106,6 +1232,7 @@ def run_restore(ask=True):
         return None
     maps = find_all_maps()
     if ask and not _confirm(
+            _skip_warning(maps) +
             "Restore every light's original mobility in all {} map(s)?\n\n{}"
             .format(len(maps), _mode_text())):
         return None
