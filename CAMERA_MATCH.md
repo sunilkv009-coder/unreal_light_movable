@@ -173,7 +173,8 @@ It doesn't need the Light Mobility Tool or Python.
 
 **One double-click (recommended)**
 
-1. Install **Visual Studio 2022** with **Game development with C++** and **Desktop development with C++** (see [INSTALL.md](INSTALL.md#10-easy-one-double-click-recommended)).
+1. Install **Visual Studio 2022** (free Community edition) with **Game development with C++**, **Desktop development with C++**
+   and **.NET desktop development**, then restart the PC (see [INSTALL.md](INSTALL.md#10-easy-one-double-click-recommended)).
 2. Close Unreal.
 3. Double-click **`Build-CameraMatch.bat`** (or drag your `.uproject` onto it) and pick your project.
    It compiles the plugin with Unreal's own build tool and copies it to `YourProject/Plugins/CameraMatch/`.

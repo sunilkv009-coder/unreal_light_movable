@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Camera Match: two sets of parallel edges meet at two vanishing points</title>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+
+  <!-- Card: its own background so it reads the same in light and dark GitHub themes -->
+  <rect x="0.5" y="0.5" width="759" height="359" rx="10" fill="#ffffff" stroke="#d0d7de"/>
+
+  <!-- The photo -->
+  <rect x="180" y="50" width="400" height="250" fill="#f6f8fa" stroke="#57606a" stroke-width="1.5"/>
+  <text x="190" y="70" font-size="13" fill="#57606a">Photo</text>
+
+  <!-- Horizon: the line through both vanishing points -->
+  <line x1="20" y1="120" x2="740" y2="120" stroke="#9a6700" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="572" y="112" font-size="12" fill="#9a6700" text-anchor="end">horizon (eye level)</text>
+
+  <!-- A box corner seen from outside -->
+  <polygon points="230,131.2 380,140 380,260 230,198.2" fill="#ddf4ff"/>
+  <polygon points="380,140 530,131.2 530,198.2 380,260" fill="#eaeef2"/>
+
+  <!-- Lines carried on to the vanishing points -->
+  <g stroke-width="1.2" stroke-dasharray="4 4">
+    <line x1="230" y1="131.2" x2="40" y2="120" stroke="#cf222e"/>
+    <line x1="230" y1="198.2" x2="40" y2="120" stroke="#cf222e"/>
+    <line x1="530" y1="131.2" x2="720" y2="120" stroke="#1a7f37"/>
+    <line x1="530" y1="198.2" x2="720" y2="120" stroke="#1a7f37"/>
+  </g>
+
+  <!-- Z, up the corner: worked out, not drawn -->
+  <line x1="380" y1="260" x2="380" y2="146" stroke="#0969da" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <text x="372" y="172" font-size="12" fill="#0969da" text-anchor="end">+Z (up)</text>
+  <text x="372" y="187" font-size="11" fill="#0969da" text-anchor="end">computed</text>
+
+  <!-- The control lines you drag: VP1 (red) and VP2 (green) -->
+  <g stroke-width="3" stroke-linecap="round">
+    <line x1="230" y1="131.2" x2="380" y2="140" stroke="#cf222e"/>
+    <line x1="230" y1="198.2" x2="380" y2="260" stroke="#cf222e"/>
+    <line x1="380" y1="140" x2="530" y2="131.2" stroke="#1a7f37"/>
+    <line x1="380" y1="260" x2="530" y2="198.2" stroke="#1a7f37"/>
+  </g>
+  <g fill="#ffffff" stroke-width="2">
+    <circle cx="230" cy="131.2" r="4.5" stroke="#cf222e"/>
+    <circle cx="230" cy="198.2" r="4.5" stroke="#cf222e"/>
+    <circle cx="530" cy="131.2" r="4.5" stroke="#1a7f37"/>
+    <circle cx="530" cy="198.2" r="4.5" stroke="#1a7f37"/>
+  </g>
+  <text x="268" y="236" font-size="12" fill="#cf222e" text-anchor="middle" transform="rotate(22.4 268 236)">edges along X</text>
+  <text x="492" y="236" font-size="12" fill="#1a7f37" text-anchor="middle" transform="rotate(-22.4 492 236)">edges along Y</text>
+
+  <!-- Vanishing points, outside the photo -->
+  <circle cx="40" cy="120" r="7" fill="#ffffff" stroke="#cf222e" stroke-width="2.5"/>
+  <text x="22" y="100" font-size="13" font-weight="600" fill="#cf222e">VP1 (+X)</text>
+  <circle cx="720" cy="120" r="7" fill="#ffffff" stroke="#1a7f37" stroke-width="2.5"/>
+  <text x="740" y="100" font-size="13" font-weight="600" fill="#1a7f37" text-anchor="end">VP2 (+Y)</text>
+
+  <!-- Origin handle -->
+  <circle cx="380" cy="260" r="6.5" fill="#ffd33d" stroke="#24292f" stroke-width="1.5"/>
+  <text x="392" y="284" font-size="12" fill="#24292f">Origin (0, 0, 0)</text>
+
+  <text x="380" y="330" font-size="13" fill="#24292f" text-anchor="middle">Each pair of parallel edges meets at a vanishing point. The two vanishing points give the focal length</text>
+  <text x="380" y="348" font-size="13" fill="#24292f" text-anchor="middle">and the rotation; the origin and your scale give the camera's position.</text>
+</svg>
